@@ -72,6 +72,7 @@ function App() {
   const [customScales, setCustomScales] = useState([]);
   const [customScaleName, setCustomScaleName] = useState('');
   const [customScaleValuesInput, setCustomScaleValuesInput] = useState('');
+  const [activityLog, setActivityLog] = useState([]);
 
   const peerRef = useRef(null);
   const connectionRef = useRef(null);
@@ -127,6 +128,7 @@ function App() {
           setSelectedVote(null);
           setVotes([]);
           setConnectionStatus('Connecting to host');
+          setActivityLog((current) => [{ id: `join-${Date.now()}`, text: 'Joining room from invite link…' }, ...current].slice(0, 8));
           setTimeout(() => initializePeer('participant'), 0);
         }
         return;
@@ -262,6 +264,7 @@ function App() {
             broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
             return nextVotes;
           });
+          setActivityLog((current) => [{ id: `join-${Date.now()}`, text: `${entry.name} joined the room` }, ...current].slice(0, 8));
         }
 
         if (payload?.type === 'leave') {
@@ -270,6 +273,7 @@ function App() {
             broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
             return nextVotes;
           });
+          setActivityLog((current) => [{ id: `leave-${Date.now()}`, text: `${payload.name || 'A participant'} left the room` }, ...current].slice(0, 8));
         }
 
         if (payload?.type === 'state') {
@@ -287,6 +291,7 @@ function App() {
           broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
           return nextVotes;
         });
+        setActivityLog((current) => [{ id: `leave-${Date.now()}`, text: 'A participant disconnected' }, ...current].slice(0, 8));
         setConnectionStatus('A participant disconnected');
       });
     });
@@ -321,6 +326,7 @@ function App() {
         },
       };
       connection.send(joinPayload);
+      setActivityLog((current) => [{ id: `join-${Date.now()}`, text: `${name || 'You'} joined the room` }, ...current].slice(0, 8));
     });
 
     connection.on('error', () => {
@@ -481,6 +487,7 @@ function App() {
     if (connectionRef.current?.open) {
       connectionRef.current.send({ type: 'leave', id: peerId || `${name}-${Date.now()}`, name });
     }
+    setActivityLog((current) => [{ id: `leave-${Date.now()}`, text: `${name || 'You'} left the room` }, ...current].slice(0, 8));
     disconnectPeer();
     setJoined(false);
     setVotes([]);
@@ -615,6 +622,22 @@ function App() {
             <div className="button-row compact">
               <button className="secondary" onClick={addDemoVote}>Add demo vote</button>
             </div>
+          </section>
+
+          <section className="card">
+            <h3>Activity</h3>
+            <ul className="participant-list">
+              {activityLog.length === 0 ? (
+                <li className="muted">No activity yet.</li>
+              ) : (
+                activityLog.map((entry) => (
+                  <li key={entry.id}>
+                    <span>{entry.text}</span>
+                    <strong>Live</strong>
+                  </li>
+                ))
+              )}
+            </ul>
           </section>
 
           <section className="card">
