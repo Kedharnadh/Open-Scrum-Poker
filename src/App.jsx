@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Peer } from 'peerjs';
 
 const cardValues = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?'];
 const storageKey = 'scrum-poker-demo-state-v1';
@@ -24,6 +25,18 @@ function calculateMedian(values) {
   return sorted[middle].toFixed(1);
 }
 
+function upsertVoteEntry(votes, entry) {
+  const nextVotes = votes.filter((item) => item.id !== entry.id);
+  return [...nextVotes, entry];
+}
+
+function buildJoinLink(roomCode, hostPeerId) {
+  const params = new URLSearchParams(window.location.search);
+  params.set('room', roomCode);
+  params.set('host', hostPeerId);
+  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+}
+
 function App() {
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -32,6 +45,28 @@ function App() {
   const [selectedVote, setSelectedVote] = useState(null);
   const [votes, setVotes] = useState([]);
   const [isHost, setIsHost] = useState(false);
+  const [peerId, setPeerId] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState('Ready to connect');
+  const [joinLink, setJoinLink] = useState('');
+
+  const peerRef = useRef(null);
+  const connectionRef = useRef(null);
+  const connectionsRef = useRef(new Map());
+  const roomCodeRef = useRef(roomCode);
+  const revealedRef = useRef(revealed);
+  const nameRef = useRef(name);
+
+  useEffect(() => {
+    roomCodeRef.current = roomCode;
+  }, [roomCode]);
+
+  useEffect(() => {
+    revealedRef.current = revealed;
+  }, [revealed]);
+
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
 
   useEffect(() => {
     try {
@@ -39,8 +74,12 @@ function App() {
       if (!saved) {
         const params = new URLSearchParams(window.location.search);
         const roomFromUrl = params.get('room');
+        const hostFromUrl = params.get('host');
         if (roomFromUrl) {
           setRoomCode(roomFromUrl.toUpperCase());
+        }
+        if (hostFromUrl) {
+          setJoinLink(buildJoinLink(roomFromUrl || '', hostFromUrl));
         }
         return;
       }
@@ -60,19 +99,154 @@ function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (roomCode) {
-      params.set('room', roomCode);
+    const roomValue = roomCode || params.get('room') || '';
+    if (roomValue) {
+      params.set('room', roomValue);
     } else {
       params.delete('room');
     }
+    if (joinLink) {
+      params.set('host', new URL(joinLink).searchParams.get('host') || '');
+    }
     const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
     window.history.replaceState({}, '', nextUrl);
-  }, [roomCode]);
+  }, [roomCode, joinLink]);
 
   useEffect(() => {
     const payload = { name, roomCode, joined, revealed, selectedVote, votes, isHost };
     window.localStorage.setItem(storageKey, JSON.stringify(payload));
   }, [name, roomCode, joined, revealed, selectedVote, votes, isHost]);
+
+  const disconnectPeer = useCallback(() => {
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+    connectionRef.current = null;
+    connectionsRef.current.clear();
+  }, []);
+
+  const broadcastState = useCallback((nextVotes, nextRevealed) => {
+    const payload = {
+      type: 'state',
+      roomCode: roomCodeRef.current,
+      revealed: nextRevealed,
+      votes: nextVotes,
+    };
+
+    connectionsRef.current.forEach((connection) => {
+      if (connection?.open) {
+        connection.send(payload);
+      }
+    });
+  }, []);
+
+  const initializePeer = useCallback((role) => {
+    if (peerRef.current) {
+      return;
+    }
+
+    const peer = new Peer(undefined, {
+      host: '0.peerjs.com',
+      port: 443,
+      secure: true,
+      path: '/',
+    });
+
+    peer.on('open', (id) => {
+      setPeerId(id);
+      setConnectionStatus(role === 'host' ? 'Hosting room' : 'Connecting to host');
+      if (role === 'host') {
+        const nextLink = buildJoinLink(roomCodeRef.current, id);
+        setJoinLink(nextLink);
+      }
+    });
+
+    peer.on('connection', (connection) => {
+      connectionRef.current = connection;
+      connectionsRef.current.set(connection.peer, connection);
+      setConnectionStatus('Participant connected');
+
+      connection.on('open', () => {
+        const initialPayload = {
+          type: 'state',
+          roomCode: roomCodeRef.current,
+          revealed: revealedRef.current,
+          votes,
+        };
+        connection.send(initialPayload);
+      });
+
+      connection.on('data', (payload) => {
+        if (payload?.type === 'join' || payload?.type === 'vote') {
+          const entry = payload.entry || {
+            id: connection.peer,
+            name: payload.name || `Guest ${connection.peer.slice(0, 4)}`,
+            vote: payload.vote ?? null,
+          };
+
+          setVotes((current) => {
+            const nextVotes = upsertVoteEntry(current, entry);
+            broadcastState(nextVotes, revealedRef.current);
+            return nextVotes;
+          });
+        }
+
+        if (payload?.type === 'state') {
+          setRevealed(Boolean(payload.revealed));
+          setVotes(payload.votes || []);
+        }
+      });
+
+      connection.on('close', () => {
+        connectionsRef.current.delete(connection.peer);
+        setConnectionStatus('A participant disconnected');
+      });
+    });
+
+    peer.on('error', (error) => {
+      setConnectionStatus(error.message || 'Connection error');
+    });
+
+    peerRef.current = peer;
+  }, [broadcastState, votes]);
+
+  const connectToHost = useCallback((hostPeerId) => {
+    if (!peerRef.current || !hostPeerId) {
+      return;
+    }
+
+    const connection = peerRef.current.connect(hostPeerId, {
+      reliable: true,
+    });
+
+    connection.on('open', () => {
+      connectionRef.current = connection;
+      setConnectionStatus('Connected to host');
+      const joinPayload = {
+        type: 'join',
+        name,
+        vote: selectedVote ?? null,
+        entry: {
+          id: peerId || connection.peer,
+          name,
+          vote: selectedVote ?? null,
+        },
+      };
+      connection.send(joinPayload);
+    });
+
+    connection.on('data', (payload) => {
+      if (payload?.type === 'state') {
+        setRevealed(Boolean(payload.revealed));
+        setVotes(payload.votes || []);
+      }
+    });
+
+    connection.on('close', () => {
+      setConnectionStatus('Disconnected from host');
+    });
+  }, [name, peerId, selectedVote]);
 
   const numericVotes = useMemo(() => votes.map((entry) => Number(entry.vote)).filter((value) => !Number.isNaN(value)), [votes]);
 
@@ -84,6 +258,8 @@ function App() {
     setSelectedVote(null);
     setVotes([]);
     setJoined(true);
+    setConnectionStatus('Preparing live room');
+    setTimeout(() => initializePeer('host'), 0);
   };
 
   const joinRoom = () => {
@@ -93,53 +269,121 @@ function App() {
     setSelectedVote(null);
     setVotes([]);
     setJoined(true);
+    setConnectionStatus('Connecting to host');
+    setTimeout(() => initializePeer('participant'), 0);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const hostFromUrl = params.get('host');
+    if (joined && !isHost && hostFromUrl && peerRef.current?.open) {
+      connectToHost(hostFromUrl);
+    }
+  }, [joined, isHost, connectToHost]);
+
+  useEffect(() => {
+    if (!joined || isHost || !roomCode) return;
+    const params = new URLSearchParams(window.location.search);
+    const hostFromUrl = params.get('host');
+    if (hostFromUrl && peerRef.current?.open) {
+      connectToHost(hostFromUrl);
+    }
+  }, [joined, isHost, roomCode, connectToHost]);
+
+  useEffect(() => {
+    if (!joined || !isHost) return;
+    const params = new URLSearchParams(window.location.search);
+    const hostFromUrl = params.get('host');
+    if (hostFromUrl) {
+      setJoinLink(buildJoinLink(roomCode, hostFromUrl));
+    }
+  }, [joined, isHost, roomCode]);
 
   const submitVote = (value) => {
     if (!joined) return;
     const normalizedVote = String(value);
     setSelectedVote(normalizedVote);
+
+    const entry = {
+      id: peerId || `${name}-${Date.now()}`,
+      name,
+      vote: normalizedVote,
+    };
+
     setVotes((current) => {
-      const existing = current.find((entry) => entry.name === name);
-      if (existing) {
-        return current.map((entry) => (entry.name === name ? { ...entry, vote: normalizedVote } : entry));
+      const nextVotes = upsertVoteEntry(current, entry);
+      if (isHost) {
+        broadcastState(nextVotes, revealedRef.current);
+      } else if (connectionRef.current?.open) {
+        connectionRef.current.send({ type: 'vote', entry });
       }
-      return [...current, { name, vote: normalizedVote }];
+      return nextVotes;
     });
   };
 
   const revealVotes = () => {
-    setRevealed((current) => !current);
+    const nextValue = !revealed;
+    setRevealed(nextValue);
+    if (isHost) {
+      broadcastState(votes, nextValue);
+    } else if (connectionRef.current?.open) {
+      connectionRef.current.send({ type: 'vote', entry: { id: peerId || `${name}-${Date.now()}`, name, vote: selectedVote ?? null } });
+    }
   };
 
   const resetRound = () => {
     setSelectedVote(null);
     setRevealed(false);
-    setVotes((current) => current.map((entry) => ({ ...entry, vote: null })));
+    const nextVotes = votes.map((entry) => ({ ...entry, vote: null }));
+    setVotes(nextVotes);
+    if (isHost) {
+      broadcastState(nextVotes, false);
+    }
   };
 
   const addDemoVote = () => {
     const demoName = `Guest ${votes.length + 1}`;
     const demoVote = cardValues[Math.floor(Math.random() * cardValues.length)];
-    setVotes((current) => [...current, { name: demoName, vote: demoVote }]);
+    const entry = { id: `${demoName}-${Date.now()}`, name: demoName, vote: demoVote };
+    setVotes((current) => {
+      const nextVotes = upsertVoteEntry(current, entry);
+      if (isHost) {
+        broadcastState(nextVotes, revealedRef.current);
+      }
+      return nextVotes;
+    });
   };
 
   const leaveRoom = () => {
+    disconnectPeer();
     setJoined(false);
     setVotes([]);
     setSelectedVote(null);
     setRevealed(false);
     setRoomCode('');
     setIsHost(false);
+    setPeerId('');
+    setJoinLink('');
+    setConnectionStatus('Ready to connect');
+  };
+
+  const copyInviteLink = async () => {
+    if (!joinLink) return;
+    try {
+      await navigator.clipboard.writeText(joinLink);
+      setConnectionStatus('Invite link copied');
+    } catch (error) {
+      console.error('Unable to copy link', error);
+    }
   };
 
   return (
     <div className="app-shell">
       <header className="hero-card">
         <div>
-          <p className="eyebrow">GitHub Pages • PWA-ready</p>
+          <p className="eyebrow">GitHub Pages • Live sync</p>
           <h1>Scrum Poker Demo</h1>
-          <p>Plan your next sprint without needing a custom domain or backend setup.</p>
+          <p>Join from a second device and watch the room update in real time.</p>
         </div>
         <div className="pill">{joined ? `Room ${roomCode}` : 'Not joined'}</div>
       </header>
@@ -159,6 +403,7 @@ function App() {
             <button onClick={createRoom}>Create room</button>
             <button className="secondary" onClick={joinRoom}>Join room</button>
           </div>
+          <p className="muted status-line">Use the same room code plus the invite link from the host to sync across devices.</p>
         </section>
       ) : (
         <>
@@ -175,6 +420,13 @@ function App() {
               </div>
             </div>
             <p className="muted">Welcome, {name}. {isHost ? 'You are hosting this room.' : 'You are joining as a participant.'}</p>
+            <p className="status-line">Connection: {connectionStatus}</p>
+            {isHost && joinLink ? (
+              <div className="share-box">
+                <span>{joinLink}</span>
+                <button className="secondary" onClick={copyInviteLink}>Copy invite link</button>
+              </div>
+            ) : null}
           </section>
 
           <section className="card">
@@ -219,7 +471,7 @@ function App() {
                 <li className="muted">No one has voted yet.</li>
               ) : (
                 votes.map((entry) => (
-                  <li key={`${entry.name}-${entry.vote}`}>
+                  <li key={`${entry.id}-${entry.name}`}>
                     <span>{entry.name}</span>
                     <strong>{revealed ? entry.vote ?? '—' : entry.vote ? '✓' : 'Pending'}</strong>
                   </li>

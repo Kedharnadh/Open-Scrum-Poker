@@ -126,6 +126,22 @@ button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
 }
 
 .muted { color: #cbd5e1; }
+.status-line { margin-top: 10px; color: #93c5fd; }
+.share-box {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.06);
+}
+.share-box span {
+  flex: 1;
+  min-width: 220px;
+  word-break: break-all;
+}
 
 @media (max-width: 680px) {
   .app-shell { padding: 14px; }
