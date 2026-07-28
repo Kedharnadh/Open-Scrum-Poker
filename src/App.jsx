@@ -35,6 +35,10 @@ function upsertVoteEntry(votes, entry) {
   return [...nextVotes, entry];
 }
 
+function removeParticipantVote(votes, participantId) {
+  return votes.filter((item) => item.id !== participantId);
+}
+
 function slugify(value) {
   return value
     .toLowerCase()
@@ -114,6 +118,16 @@ function App() {
         if (hostFromUrl) {
           setHostPeerId(hostFromUrl);
           setJoinLink(buildJoinLink(roomFromUrl || '', hostFromUrl, titleFromUrl || '', scaleFromUrl || ''));
+        }
+        if (roomFromUrl && hostFromUrl) {
+          setName('Guest');
+          setJoined(true);
+          setIsHost(false);
+          setRevealed(false);
+          setSelectedVote(null);
+          setVotes([]);
+          setConnectionStatus('Connecting to host');
+          setTimeout(() => initializePeer('participant'), 0);
         }
         return;
       }
@@ -250,6 +264,14 @@ function App() {
           });
         }
 
+        if (payload?.type === 'leave') {
+          setVotes((current) => {
+            const nextVotes = removeParticipantVote(current, payload.id || connection.peer);
+            broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
+            return nextVotes;
+          });
+        }
+
         if (payload?.type === 'state') {
           setRevealed(Boolean(payload.revealed));
           setRoomTitle(payload.roomTitle || roomTitleRef.current);
@@ -260,6 +282,11 @@ function App() {
 
       connection.on('close', () => {
         connectionsRef.current.delete(connection.peer);
+        setVotes((current) => {
+          const nextVotes = removeParticipantVote(current, connection.peer);
+          broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
+          return nextVotes;
+        });
         setConnectionStatus('A participant disconnected');
       });
     });
@@ -325,6 +352,11 @@ function App() {
       .map((entry) => Number(entry.vote))
       .filter((value) => !Number.isNaN(value));
   }, [votes]);
+
+  useEffect(() => {
+    if (!joined || !isHost || !peerId || !roomCode) return;
+    setJoinLink(buildJoinLink(roomCode, peerId, roomTitle, selectedScaleId));
+  }, [joined, isHost, peerId, roomCode, roomTitle, selectedScaleId]);
 
   const createRoom = () => {
     const nextRoom = generateRoomCode();
@@ -446,6 +478,9 @@ function App() {
   };
 
   const leaveRoom = () => {
+    if (connectionRef.current?.open) {
+      connectionRef.current.send({ type: 'leave', id: peerId || `${name}-${Date.now()}`, name });
+    }
     disconnectPeer();
     setJoined(false);
     setVotes([]);
