@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Peer } from 'peerjs';
+import { supabase } from './services/supabaseClient';
+import { normalizeRoomState, removeParticipantVote, upsertVoteEntry } from './services/roomState';
 
 const storageKey = 'scrum-poker-demo-state-v1';
 const defaultScales = [
@@ -30,15 +31,6 @@ function calculateMedian(values) {
   return sorted[middle].toFixed(1);
 }
 
-function upsertVoteEntry(votes, entry) {
-  const nextVotes = votes.filter((item) => item.id !== entry.id);
-  return [...nextVotes, entry];
-}
-
-function removeParticipantVote(votes, participantId) {
-  return votes.filter((item) => item.id !== participantId);
-}
-
 function slugify(value) {
   return value
     .toLowerCase()
@@ -46,10 +38,9 @@ function slugify(value) {
     .replace(/(^-|-$)/g, '');
 }
 
-function buildJoinLink(roomCode, hostPeerId, roomTitle, selectedScaleId) {
+function buildJoinLink(roomCode, roomTitle, selectedScaleId) {
   const params = new URLSearchParams(window.location.search);
   params.set('room', roomCode);
-  params.set('host', hostPeerId);
   params.set('title', roomTitle || '');
   params.set('scale', selectedScaleId || '');
   return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
@@ -64,8 +55,6 @@ function App() {
   const [selectedVote, setSelectedVote] = useState(null);
   const [votes, setVotes] = useState([]);
   const [isHost, setIsHost] = useState(false);
-  const [peerId, setPeerId] = useState('');
-  const [hostPeerId, setHostPeerId] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('Ready to connect');
   const [joinLink, setJoinLink] = useState('');
   const [selectedScaleId, setSelectedScaleId] = useState(defaultScales[0].id);
@@ -73,14 +62,15 @@ function App() {
   const [customScaleName, setCustomScaleName] = useState('');
   const [customScaleValuesInput, setCustomScaleValuesInput] = useState('');
   const [activityLog, setActivityLog] = useState([]);
+  const [joinError, setJoinError] = useState('');
 
-  const peerRef = useRef(null);
-  const connectionRef = useRef(null);
-  const connectionsRef = useRef(new Map());
   const roomCodeRef = useRef(roomCode);
   const revealedRef = useRef(revealed);
   const roomTitleRef = useRef(roomTitle);
   const selectedScaleIdRef = useRef(selectedScaleId);
+  const votesRef = useRef(votes);
+  const activityLogRef = useRef(activityLog);
+  const participantIdRef = useRef('');
 
   useEffect(() => {
     roomCodeRef.current = roomCode;
@@ -99,52 +89,47 @@ function App() {
   }, [selectedScaleId]);
 
   useEffect(() => {
+    votesRef.current = votes;
+  }, [votes]);
+
+  useEffect(() => {
+    activityLogRef.current = activityLog;
+  }, [activityLog]);
+
+  useEffect(() => {
     try {
       const saved = window.localStorage.getItem(storageKey);
+      const params = new URLSearchParams(window.location.search);
+      const roomFromUrl = params.get('room');
+      const titleFromUrl = params.get('title');
+      const scaleFromUrl = params.get('scale');
+
+      if (roomFromUrl) {
+        setRoomCode(roomFromUrl.toUpperCase());
+      }
+      if (titleFromUrl) {
+        setRoomTitle(titleFromUrl);
+      }
+      if (scaleFromUrl) {
+        setSelectedScaleId(scaleFromUrl);
+      }
+
       if (!saved) {
-        const params = new URLSearchParams(window.location.search);
-        const roomFromUrl = params.get('room');
-        const hostFromUrl = params.get('host');
-        const titleFromUrl = params.get('title');
-        const scaleFromUrl = params.get('scale');
-        if (roomFromUrl) {
-          setRoomCode(roomFromUrl.toUpperCase());
-        }
-        if (titleFromUrl) {
-          setRoomTitle(titleFromUrl);
-        }
-        if (scaleFromUrl) {
-          setSelectedScaleId(scaleFromUrl);
-        }
-        if (hostFromUrl) {
-          setHostPeerId(hostFromUrl);
-          setJoinLink(buildJoinLink(roomFromUrl || '', hostFromUrl, titleFromUrl || '', scaleFromUrl || ''));
-        }
-        if (roomFromUrl && hostFromUrl) {
-          setName('Guest');
-          setJoined(true);
-          setIsHost(false);
-          setRevealed(false);
-          setSelectedVote(null);
-          setVotes([]);
-          setConnectionStatus('Connecting to host');
-          setActivityLog((current) => [{ id: `join-${Date.now()}`, text: 'Joining room from invite link…' }, ...current].slice(0, 8));
-          setTimeout(() => initializePeer('participant'), 0);
-        }
         return;
       }
 
       const parsed = JSON.parse(saved);
       setName(parsed.name || '');
-      setRoomCode(parsed.roomCode || '');
-      setRoomTitle(parsed.roomTitle || 'Sprint Planning');
+      setRoomCode(parsed.roomCode || roomFromUrl?.toUpperCase() || '');
+      setRoomTitle(parsed.roomTitle || titleFromUrl || 'Sprint Planning');
       setJoined(Boolean(parsed.joined));
       setRevealed(Boolean(parsed.revealed));
       setSelectedVote(parsed.selectedVote ?? null);
       setVotes(parsed.votes || []);
       setIsHost(Boolean(parsed.isHost));
-      setSelectedScaleId(parsed.selectedScaleId || defaultScales[0].id);
+      setSelectedScaleId(parsed.selectedScaleId || scaleFromUrl || defaultScales[0].id);
       setCustomScales(parsed.customScales || []);
+      setActivityLog(parsed.activityLog || []);
     } catch (error) {
       console.error('Unable to restore state', error);
     }
@@ -159,15 +144,12 @@ function App() {
       params.delete('room');
     }
     params.set('title', roomTitle || 'Sprint Planning');
-    if (joinLink) {
-      params.set('host', new URL(joinLink).searchParams.get('host') || '');
-    }
     if (selectedScaleId) {
       params.set('scale', selectedScaleId);
     }
     const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
     window.history.replaceState({}, '', nextUrl);
-  }, [roomCode, roomTitle, joinLink, selectedScaleId]);
+  }, [roomCode, roomTitle, selectedScaleId]);
 
   useEffect(() => {
     const payload = {
@@ -181,229 +163,158 @@ function App() {
       isHost,
       selectedScaleId,
       customScales,
+      activityLog,
     };
     window.localStorage.setItem(storageKey, JSON.stringify(payload));
-  }, [name, roomCode, roomTitle, joined, revealed, selectedVote, votes, isHost, selectedScaleId, customScales]);
-
-  const disconnectPeer = useCallback(() => {
-    if (peerRef.current) {
-      peerRef.current.destroy();
-      peerRef.current = null;
-    }
-    connectionRef.current = null;
-    connectionsRef.current.clear();
-    setPeerId('');
-    setHostPeerId('');
-  }, []);
-
-  const broadcastState = useCallback((nextVotes, nextRevealed, nextRoomTitle, nextScaleId) => {
-    const payload = {
-      type: 'state',
-      roomCode: roomCodeRef.current,
-      roomTitle: nextRoomTitle,
-      selectedScaleId: nextScaleId,
-      revealed: nextRevealed,
-      votes: nextVotes,
-    };
-
-    connectionsRef.current.forEach((connection) => {
-      if (connection?.open) {
-        connection.send(payload);
-      }
-    });
-  }, []);
-
-  const initializePeer = useCallback((role) => {
-    if (peerRef.current) {
-      return;
-    }
-
-    const peer = new Peer(undefined, {
-      host: '0.peerjs.com',
-      port: 443,
-      secure: true,
-      path: '/',
-    });
-
-    peer.on('open', (id) => {
-      setPeerId(id);
-      setConnectionStatus(role === 'host' ? 'Hosting room' : 'Connecting to host');
-      if (role === 'host') {
-        const nextLink = buildJoinLink(roomCodeRef.current, id, roomTitleRef.current, selectedScaleIdRef.current);
-        setJoinLink(nextLink);
-      }
-    });
-
-    peer.on('connection', (connection) => {
-      connectionRef.current = connection;
-      connectionsRef.current.set(connection.peer, connection);
-      setConnectionStatus('Participant connected');
-
-      connection.on('open', () => {
-        const initialPayload = {
-          type: 'state',
-          roomCode: roomCodeRef.current,
-          roomTitle: roomTitleRef.current,
-          selectedScaleId: selectedScaleIdRef.current,
-          revealed: revealedRef.current,
-          votes,
-        };
-        connection.send(initialPayload);
-      });
-
-      connection.on('data', (payload) => {
-        if (payload?.type === 'join' || payload?.type === 'vote') {
-          const entry = payload.entry || {
-            id: connection.peer,
-            name: payload.name || `Guest ${connection.peer.slice(0, 4)}`,
-            vote: payload.vote ?? null,
-          };
-
-          setVotes((current) => {
-            const nextVotes = upsertVoteEntry(current, entry);
-            broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
-            return nextVotes;
-          });
-          setActivityLog((current) => [{ id: `join-${Date.now()}`, text: `${entry.name} joined the room` }, ...current].slice(0, 8));
-        }
-
-        if (payload?.type === 'leave') {
-          setVotes((current) => {
-            const nextVotes = removeParticipantVote(current, payload.id || connection.peer);
-            broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
-            return nextVotes;
-          });
-          setActivityLog((current) => [{ id: `leave-${Date.now()}`, text: `${payload.name || 'A participant'} left the room` }, ...current].slice(0, 8));
-        }
-
-        if (payload?.type === 'state') {
-          setRevealed(Boolean(payload.revealed));
-          setRoomTitle(payload.roomTitle || roomTitleRef.current);
-          setSelectedScaleId(payload.selectedScaleId || selectedScaleIdRef.current);
-          setVotes(payload.votes || []);
-        }
-      });
-
-      connection.on('close', () => {
-        connectionsRef.current.delete(connection.peer);
-        setVotes((current) => {
-          const nextVotes = removeParticipantVote(current, connection.peer);
-          broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
-          return nextVotes;
-        });
-        setActivityLog((current) => [{ id: `leave-${Date.now()}`, text: 'A participant disconnected' }, ...current].slice(0, 8));
-        setConnectionStatus('A participant disconnected');
-      });
-    });
-
-    peer.on('error', (error) => {
-      setConnectionStatus(error.message || 'Connection error');
-    });
-
-    peerRef.current = peer;
-  }, [broadcastState, votes]);
-
-  const connectToHost = useCallback((hostPeerIdValue) => {
-    if (!peerRef.current || !hostPeerIdValue) {
-      return;
-    }
-
-    const connection = peerRef.current.connect(hostPeerIdValue, {
-      reliable: true,
-    });
-
-    connection.on('open', () => {
-      connectionRef.current = connection;
-      setConnectionStatus('Connected to host');
-      const joinPayload = {
-        type: 'join',
-        name,
-        vote: selectedVote ?? null,
-        entry: {
-          id: peerId || connection.peer,
-          name,
-          vote: selectedVote ?? null,
-        },
-      };
-      connection.send(joinPayload);
-      setActivityLog((current) => [{ id: `join-${Date.now()}`, text: `${name || 'You'} joined the room` }, ...current].slice(0, 8));
-    });
-
-    connection.on('error', () => {
-      setConnectionStatus('Could not reach the host. Please refresh and try again.');
-    });
-
-    connection.on('data', (payload) => {
-      if (payload?.type === 'state') {
-        setRevealed(Boolean(payload.revealed));
-        setRoomTitle(payload.roomTitle || roomTitleRef.current);
-        setSelectedScaleId(payload.selectedScaleId || selectedScaleIdRef.current);
-        setVotes(payload.votes || []);
-      }
-    });
-
-    connection.on('close', () => {
-      setConnectionStatus('Disconnected from host');
-    });
-  }, [name, peerId, selectedVote]);
-
-  const scaleOptions = useMemo(() => [...defaultScales, ...customScales], [customScales]);
-  const activeScale = useMemo(() => {
-    const scale = scaleOptions.find((item) => item.id === selectedScaleId);
-    return scale || defaultScales[0];
-  }, [scaleOptions, selectedScaleId]);
-
-  const numericVotes = useMemo(() => {
-    return votes
-      .map((entry) => Number(entry.vote))
-      .filter((value) => !Number.isNaN(value));
-  }, [votes]);
+  }, [name, roomCode, roomTitle, joined, revealed, selectedVote, votes, isHost, selectedScaleId, customScales, activityLog]);
 
   useEffect(() => {
-    if (!joined || !isHost || !peerId || !roomCode) return;
-    setJoinLink(buildJoinLink(roomCode, peerId, roomTitle, selectedScaleId));
-  }, [joined, isHost, peerId, roomCode, roomTitle, selectedScaleId]);
+    if (!joined || !isHost || !roomCode) return;
+    setJoinLink(buildJoinLink(roomCode, roomTitle, selectedScaleId));
+  }, [joined, isHost, roomCode, roomTitle, selectedScaleId]);
 
-  const createRoom = () => {
-    const nextRoom = generateRoomCode();
-    setRoomCode(nextRoom);
+  const getRoomStorageKey = useCallback((code) => `scrum-poker-room:${(code || '').toUpperCase()}`, []);
+
+  const readStoredRoom = useCallback((code) => {
+    try {
+      const normalizedCode = (code || '').toUpperCase();
+      const storedValue = window.localStorage.getItem(getRoomStorageKey(normalizedCode));
+      if (!storedValue) return null;
+      return normalizeRoomState(JSON.parse(storedValue));
+    } catch (error) {
+      console.error('Unable to load room state', error);
+      return null;
+    }
+  }, [getRoomStorageKey]);
+
+  const persistRoom = useCallback(async (nextState) => {
+    const normalized = normalizeRoomState({
+      roomCode: nextState?.roomCode || roomCodeRef.current,
+      roomTitle: nextState?.roomTitle || roomTitleRef.current,
+      selectedScaleId: nextState?.selectedScaleId || selectedScaleIdRef.current,
+      revealed: nextState?.revealed,
+      votes: nextState?.votes || [],
+      participants: nextState?.participants || [],
+      activityLog: nextState?.activityLog || [],
+    });
+
+    const roomCodeValue = (normalized.roomCode || '').toUpperCase();
+    if (!roomCodeValue) return;
+
+    const storagePayload = JSON.stringify(normalized);
+    window.localStorage.setItem(getRoomStorageKey(roomCodeValue), storagePayload);
+
+    if (supabase) {
+      try {
+        const { error } = await supabase.from('rooms').upsert({
+          room_code: roomCodeValue,
+          room_title: normalized.roomTitle,
+          selected_scale_id: normalized.selectedScaleId,
+          revealed: normalized.revealed,
+          votes: normalized.votes,
+          participants: normalized.participants,
+          activity_log: normalized.activityLog,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'room_code' });
+
+        if (!error) {
+          setConnectionStatus('Room synced');
+          return;
+        }
+
+        console.warn('Supabase room sync unavailable, using local storage only', error.message);
+      } catch (error) {
+        console.warn('Supabase room sync unavailable, using local storage only', error);
+      }
+    }
+
+    setConnectionStatus('Room saved locally');
+  }, [getRoomStorageKey]);
+
+  const createRoom = async () => {
+    if (!name.trim()) {
+      setJoinError('Please enter your name before creating a room.');
+      return;
+    }
+
+    const nextRoomCode = (roomCode || generateRoomCode()).toUpperCase();
+    const nextRoomTitle = roomTitle || 'Sprint Planning';
+    const nextScaleId = selectedScaleId || defaultScales[0].id;
+    const nextParticipantId = `${slugify(name)}-${Date.now()}`;
+    const nextActivityLog = [{ id: `create-${Date.now()}`, text: `${name} created the room` }];
+    const nextVotes = upsertVoteEntry([], { id: nextParticipantId, name, vote: null });
+
+    participantIdRef.current = nextParticipantId;
+    setRoomCode(nextRoomCode);
+    setJoined(true);
     setIsHost(true);
     setRevealed(false);
     setSelectedVote(null);
-    setVotes([]);
-    setJoined(true);
-    setConnectionStatus('Preparing live room');
-    setTimeout(() => initializePeer('host'), 0);
+    setVotes(nextVotes);
+    setActivityLog(nextActivityLog);
+    setJoinError('');
+    setJoinLink(buildJoinLink(nextRoomCode, nextRoomTitle, nextScaleId));
+    setConnectionStatus('Room ready');
+
+    await persistRoom({
+      roomCode: nextRoomCode,
+      roomTitle: nextRoomTitle,
+      selectedScaleId: nextScaleId,
+      revealed: false,
+      votes: nextVotes,
+      participants: [],
+      activityLog: nextActivityLog,
+    });
   };
 
-  const joinRoom = () => {
-    if (!name.trim() || !roomCode.trim()) return;
-    const params = new URLSearchParams(window.location.search);
-    const hostFromUrl = params.get('host');
-    if (hostFromUrl) {
-      setHostPeerId(hostFromUrl);
+  const joinRoom = async () => {
+    if (!name.trim()) {
+      setJoinError('Please enter your name before joining a room.');
+      return;
     }
+
+    const nextRoomCode = (roomCode || '').trim().toUpperCase();
+    if (!nextRoomCode) {
+      setJoinError('Please enter a room code to join.');
+      return;
+    }
+
+    const existingRoom = readStoredRoom(nextRoomCode);
+    if (!existingRoom) {
+      setJoined(false);
+      setJoinError('No room found yet. Create it first, then share the invite link.');
+      setConnectionStatus('Room not found');
+      return;
+    }
+
+    const nextParticipantId = `${slugify(name)}-${Date.now()}`;
+    participantIdRef.current = nextParticipantId;
+
+    const entry = { id: nextParticipantId, name, vote: null };
+    const nextVotes = upsertVoteEntry(existingRoom.votes || [], entry);
+    const nextActivityLog = [{ id: `join-${Date.now()}`, text: `${name} joined the room` }, ...(existingRoom.activityLog || [])].slice(0, 8);
+
+    setRoomCode(nextRoomCode);
+    setJoined(true);
     setIsHost(false);
-    setRevealed(false);
-    setSelectedVote(null);
-    setVotes([]);
-    setJoined(true);
-    setConnectionStatus('Connecting to host');
-    setTimeout(() => initializePeer('participant'), 0);
+    setRevealed(Boolean(existingRoom.revealed));
+    setRoomTitle(existingRoom.roomTitle || roomTitle || 'Sprint Planning');
+    setSelectedScaleId(existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id);
+    setVotes(nextVotes);
+    setActivityLog(nextActivityLog);
+    setJoinError('');
+    setConnectionStatus('Joined room');
+
+    await persistRoom({
+      roomCode: nextRoomCode,
+      roomTitle: existingRoom.roomTitle || roomTitle || 'Sprint Planning',
+      selectedScaleId: existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id,
+      revealed: Boolean(existingRoom.revealed),
+      votes: nextVotes,
+      participants: existingRoom.participants || [],
+      activityLog: nextActivityLog,
+    });
   };
-
-  useEffect(() => {
-    if (!joined || isHost || !hostPeerId || !peerId) return;
-    connectToHost(hostPeerId);
-  }, [joined, isHost, hostPeerId, peerId, connectToHost]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const hostFromUrl = params.get('host');
-    if (hostFromUrl) {
-      setHostPeerId(hostFromUrl);
-    }
-  }, []);
 
   const addCustomScale = () => {
     if (!customScaleName.trim() || !customScaleValuesInput.trim()) return;
@@ -428,74 +339,99 @@ function App() {
     setCustomScaleValuesInput('');
   };
 
-  const submitVote = (value) => {
+  const scaleOptions = useMemo(() => [...defaultScales, ...customScales], [customScales]);
+  const activeScale = useMemo(() => {
+    const scale = scaleOptions.find((item) => item.id === selectedScaleId);
+    return scale || defaultScales[0];
+  }, [scaleOptions, selectedScaleId]);
+
+  const numericVotes = useMemo(() => {
+    return votes
+      .map((entry) => Number(entry.vote))
+      .filter((value) => !Number.isNaN(value));
+  }, [votes]);
+
+  const submitVote = async (value) => {
     if (!joined) return;
     const normalizedVote = String(value);
     setSelectedVote(normalizedVote);
 
     const entry = {
-      id: peerId || `${name}-${Date.now()}`,
+      id: participantIdRef.current || `${name}-${Date.now()}`,
       name,
       vote: normalizedVote,
     };
 
-    setVotes((current) => {
-      const nextVotes = upsertVoteEntry(current, entry);
-      if (isHost) {
-        broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
-      } else if (connectionRef.current?.open) {
-        connectionRef.current.send({ type: 'vote', entry });
-      }
-      return nextVotes;
+    const nextVotes = upsertVoteEntry(votesRef.current, entry);
+    setVotes(nextVotes);
+    await persistRoom({
+      votes: nextVotes,
+      revealed,
+      roomTitle: roomTitleRef.current,
+      selectedScaleId: selectedScaleIdRef.current,
+      activityLog: activityLogRef.current,
     });
   };
 
-  const revealVotes = () => {
+  const revealVotes = async () => {
     const nextValue = !revealed;
     setRevealed(nextValue);
-    if (isHost) {
-      broadcastState(votes, nextValue, roomTitleRef.current, selectedScaleIdRef.current);
-    } else if (connectionRef.current?.open) {
-      connectionRef.current.send({ type: 'vote', entry: { id: peerId || `${name}-${Date.now()}`, name, vote: selectedVote ?? null } });
-    }
-  };
-
-  const resetRound = () => {
-    setSelectedVote(null);
-    setRevealed(false);
-    const nextVotes = votes.map((entry) => ({ ...entry, vote: null }));
-    setVotes(nextVotes);
-    if (isHost) {
-      broadcastState(nextVotes, false, roomTitleRef.current, selectedScaleIdRef.current);
-    }
-  };
-
-  const addDemoVote = () => {
-    const demoName = `Guest ${votes.length + 1}`;
-    const demoVote = activeScale.values[Math.floor(Math.random() * activeScale.values.length)];
-    const entry = { id: `${demoName}-${Date.now()}`, name: demoName, vote: demoVote };
-    setVotes((current) => {
-      const nextVotes = upsertVoteEntry(current, entry);
-      if (isHost) {
-        broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
-      }
-      return nextVotes;
+    await persistRoom({
+      votes: votesRef.current,
+      revealed: nextValue,
+      roomTitle: roomTitleRef.current,
+      selectedScaleId: selectedScaleIdRef.current,
+      activityLog: activityLogRef.current,
     });
   };
 
-  const leaveRoom = () => {
-    if (connectionRef.current?.open) {
-      connectionRef.current.send({ type: 'leave', id: peerId || `${name}-${Date.now()}`, name });
-    }
-    setActivityLog((current) => [{ id: `leave-${Date.now()}`, text: `${name || 'You'} left the room` }, ...current].slice(0, 8));
-    disconnectPeer();
+  const resetRound = async () => {
+    setSelectedVote(null);
+    setRevealed(false);
+    const nextVotes = votesRef.current.map((entry) => ({ ...entry, vote: null }));
+    setVotes(nextVotes);
+    await persistRoom({
+      votes: nextVotes,
+      revealed: false,
+      roomTitle: roomTitleRef.current,
+      selectedScaleId: selectedScaleIdRef.current,
+      activityLog: activityLogRef.current,
+    });
+  };
+
+  const addDemoVote = async () => {
+    const demoName = `Guest ${votesRef.current.length + 1}`;
+    const demoVote = activeScale.values[Math.floor(Math.random() * activeScale.values.length)];
+    const entry = { id: `${demoName}-${Date.now()}`, name: demoName, vote: demoVote };
+    const nextVotes = upsertVoteEntry(votesRef.current, entry);
+    setVotes(nextVotes);
+    await persistRoom({
+      votes: nextVotes,
+      revealed,
+      roomTitle: roomTitleRef.current,
+      selectedScaleId: selectedScaleIdRef.current,
+      activityLog: activityLogRef.current,
+    });
+  };
+
+  const leaveRoom = async () => {
+    const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
+    const nextActivityLog = [{ id: `leave-${Date.now()}`, text: `${name || 'You'} left the room` }, ...activityLogRef.current].slice(0, 8);
+    setVotes(nextVotes);
+    setActivityLog(nextActivityLog);
+    await persistRoom({
+      votes: nextVotes,
+      revealed: false,
+      roomTitle: roomTitleRef.current,
+      selectedScaleId: selectedScaleIdRef.current,
+      activityLog: nextActivityLog,
+    });
     setJoined(false);
     setVotes([]);
     setSelectedVote(null);
     setRevealed(false);
     setRoomCode('');
     setIsHost(false);
-    setHostPeerId('');
     setJoinLink('');
     setConnectionStatus('Ready to connect');
   };
@@ -514,9 +450,9 @@ function App() {
     <div className="app-shell">
       <header className="hero-card">
         <div>
-          <p className="eyebrow">GitHub Pages • Live sync</p>
+          <p className="eyebrow">GitHub Pages • Room state</p>
           <h1>{roomTitle || 'Scrum Poker Room'}</h1>
-          <p>Join from a second device and watch the room update in real time.</p>
+          <p>Open the invite link from another device and enter your name before joining.</p>
         </div>
         <div className="pill">{joined ? `Room ${roomCode}` : 'Not joined'}</div>
       </header>
@@ -563,7 +499,8 @@ function App() {
             <button onClick={createRoom}>Create room</button>
             <button className="secondary" onClick={joinRoom}>Join room</button>
           </div>
-          <p className="muted status-line">Use the same room code plus the invite link from the host to sync across devices.</p>
+          {joinError ? <p className="muted status-line">{joinError}</p> : null}
+          <p className="muted status-line">Share the room link from the host and enter your name before you join.</p>
         </section>
       ) : (
         <>

@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "peerjs": "^1.5.1",
+    "@supabase/supabase-js": "^2.6.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
