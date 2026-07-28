@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './services/supabaseClient';
-import { normalizeRoomState, removeParticipantVote, resolveRoomState, upsertVoteEntry } from './services/roomState';
+import { createRoomState, normalizeRoomState, removeParticipantVote, resolveRoomState, upsertVoteEntry } from './services/roomState';
 
 const storageKey = 'scrum-poker-demo-state-v1';
 const defaultScales = [
@@ -308,38 +308,40 @@ function App() {
     }
 
     const existingRoom = await readStoredRoom(nextRoomCode);
-    if (!existingRoom) {
-      setJoined(false);
-      setJoinError('No room found yet. Create it first, then share the invite link.');
-      setConnectionStatus('Room not found');
-      return;
-    }
+    const roomToJoin = existingRoom || createRoomState(nextRoomCode, {
+      roomTitle: roomTitle || 'Sprint Planning',
+      selectedScaleId: selectedScaleId || defaultScales[0].id,
+      revealed: false,
+      votes: [],
+      participants: [],
+      activityLog: [],
+    });
 
     const nextParticipantId = `${slugify(name)}-${Date.now()}`;
     participantIdRef.current = nextParticipantId;
 
     const entry = { id: nextParticipantId, name, vote: null };
-    const nextVotes = upsertVoteEntry(existingRoom.votes || [], entry);
-    const nextActivityLog = [{ id: `join-${Date.now()}`, text: `${name} joined the room` }, ...(existingRoom.activityLog || [])].slice(0, 8);
+    const nextVotes = upsertVoteEntry(roomToJoin.votes || [], entry);
+    const nextActivityLog = [{ id: `join-${Date.now()}`, text: `${name} joined the room` }, ...(roomToJoin.activityLog || [])].slice(0, 8);
 
     setRoomCode(nextRoomCode);
     setJoined(true);
     setIsHost(false);
-    setRevealed(Boolean(existingRoom.revealed));
-    setRoomTitle(existingRoom.roomTitle || roomTitle || 'Sprint Planning');
-    setSelectedScaleId(existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id);
+    setRevealed(Boolean(roomToJoin.revealed));
+    setRoomTitle(roomToJoin.roomTitle || roomTitle || 'Sprint Planning');
+    setSelectedScaleId(roomToJoin.selectedScaleId || selectedScaleId || defaultScales[0].id);
     setVotes(nextVotes);
     setActivityLog(nextActivityLog);
     setJoinError('');
-    setConnectionStatus('Joined room');
+    setConnectionStatus(existingRoom ? 'Joined room' : 'Joined room (created locally)');
 
     await persistRoom({
       roomCode: nextRoomCode,
-      roomTitle: existingRoom.roomTitle || roomTitle || 'Sprint Planning',
-      selectedScaleId: existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id,
-      revealed: Boolean(existingRoom.revealed),
+      roomTitle: roomToJoin.roomTitle || roomTitle || 'Sprint Planning',
+      selectedScaleId: roomToJoin.selectedScaleId || selectedScaleId || defaultScales[0].id,
+      revealed: Boolean(roomToJoin.revealed),
       votes: nextVotes,
-      participants: existingRoom.participants || [],
+      participants: roomToJoin.participants || [],
       activityLog: nextActivityLog,
     });
   };

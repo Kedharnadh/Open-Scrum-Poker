@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveRoomState } from './roomState.js';
+import { createRoomState, resolveRoomState } from './roomState.js';
 
 test('prefers remote room state when available', () => {
   const result = resolveRoomState(null, {
@@ -32,4 +32,16 @@ test('falls back to local room state when no remote state exists', () => {
   assert.equal(result?.roomCode, 'XYZ789');
   assert.equal(result?.roomTitle, 'Local room');
   assert.equal(result?.selectedScaleId, 'linear-1-8');
+});
+
+test('creates a provisional room state when no stored room exists', () => {
+  const result = createRoomState('ABC999', {
+    roomTitle: 'New room',
+    selectedScaleId: 'fibonacci',
+  });
+
+  assert.equal(result?.roomCode, 'ABC999');
+  assert.equal(result?.roomTitle, 'New room');
+  assert.equal(result?.selectedScaleId, 'fibonacci');
+  assert.deepEqual(result?.votes, []);
 });

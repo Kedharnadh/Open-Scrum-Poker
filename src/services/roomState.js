@@ -19,6 +19,18 @@ export function normalizeRoomState(payload) {
   };
 }
 
+export function createRoomState(roomCode, overrides = {}) {
+  return normalizeRoomState({
+    roomCode,
+    roomTitle: overrides.roomTitle || 'Sprint Planning',
+    selectedScaleId: overrides.selectedScaleId || '',
+    revealed: overrides.revealed ?? false,
+    votes: overrides.votes || [],
+    participants: overrides.participants || [],
+    activityLog: overrides.activityLog || [],
+  });
+}
+
 export function resolveRoomState(localRoomState, remoteRoomState) {
   const localRoom = normalizeRoomState(localRoomState);
   const remoteRoom = normalizeRoomState(remoteRoomState);
