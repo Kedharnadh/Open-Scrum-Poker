@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from './services/supabaseClient';
-import { createRoomState, normalizeRoomState, removeParticipantVote, resolveRoomState, upsertVoteEntry } from './services/roomState';
+import { get, onValue, ref, set } from 'firebase/database';
+import { database } from './services/firebaseClient';
+import { normalizeRoomState, removeParticipantVote, resolveRoomState, upsertVoteEntry } from './services/roomState';
 
 const storageKey = 'scrum-poker-demo-state-v1';
 const defaultScales = [
@@ -181,34 +182,16 @@ function App() {
       const storedValue = window.localStorage.getItem(getRoomStorageKey(normalizedCode));
       const localRoom = storedValue ? normalizeRoomState(JSON.parse(storedValue)) : null;
 
-      if (!supabase) {
+      if (!database) {
         return localRoom ? resolveRoomState(localRoom, null) : null;
       }
 
-      const { data, error } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('room_code', normalizedCode)
-        .maybeSingle();
-
-      if (error) {
-        console.warn('Unable to fetch room from Supabase', error.message);
+      const snapshot = await get(ref(database, `rooms/${normalizedCode}`));
+      if (!snapshot.exists()) {
         return localRoom ? resolveRoomState(localRoom, null) : null;
       }
 
-      if (!data) {
-        return localRoom ? resolveRoomState(localRoom, null) : null;
-      }
-
-      return resolveRoomState(localRoom, {
-        roomCode: data.room_code,
-        roomTitle: data.room_title,
-        selectedScaleId: data.selected_scale_id,
-        revealed: data.revealed,
-        votes: data.votes,
-        participants: data.participants,
-        activityLog: data.activity_log,
-      });
+      return resolveRoomState(localRoom, snapshot.val());
     } catch (error) {
       console.error('Unable to load room state', error);
       return null;
@@ -232,32 +215,48 @@ function App() {
     const storagePayload = JSON.stringify(normalized);
     window.localStorage.setItem(getRoomStorageKey(roomCodeValue), storagePayload);
 
-    if (supabase) {
+    if (database) {
       try {
-        const { error } = await supabase.from('rooms').upsert({
-          room_code: roomCodeValue,
-          room_title: normalized.roomTitle,
-          selected_scale_id: normalized.selectedScaleId,
-          revealed: normalized.revealed,
-          votes: normalized.votes,
-          participants: normalized.participants,
-          activity_log: normalized.activityLog,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'room_code' });
-
-        if (!error) {
-          setConnectionStatus('Room synced');
-          return;
-        }
-
-        console.warn('Supabase room sync unavailable, using local storage only', error.message);
+        await set(ref(database, `rooms/${roomCodeValue}`), normalized);
+        setConnectionStatus('Room synced');
+        return;
       } catch (error) {
-        console.warn('Supabase room sync unavailable, using local storage only', error);
+        console.warn('Firebase room sync unavailable, using local storage only', error);
       }
     }
 
-    setConnectionStatus('Room saved locally');
+    setConnectionStatus(database ? 'Cloud sync unavailable — changes saved on this device only' : 'Cloud sync is not configured — changes are saved on this device only');
   }, [getRoomStorageKey]);
+
+  const applyRemoteRoomState = useCallback((payload) => {
+    const remoteRoom = normalizeRoomState(payload);
+
+    if (!remoteRoom.roomCode || remoteRoom.roomCode.toUpperCase() !== roomCodeRef.current.toUpperCase()) return;
+
+    setRoomTitle(remoteRoom.roomTitle);
+    setSelectedScaleId(remoteRoom.selectedScaleId || defaultScales[0].id);
+    setRevealed(remoteRoom.revealed);
+    setVotes(remoteRoom.votes);
+    setActivityLog(remoteRoom.activityLog);
+    const ownVote = remoteRoom.votes.find((entry) => entry.id === participantIdRef.current)?.vote ?? null;
+    setSelectedVote(ownVote);
+    setConnectionStatus('Live connection');
+  }, []);
+
+  useEffect(() => {
+    if (!joined || !roomCode || !database) return undefined;
+
+    const normalizedCode = roomCode.toUpperCase();
+    setConnectionStatus('Connecting to room…');
+    return onValue(
+      ref(database, `rooms/${normalizedCode}`),
+      (snapshot) => {
+        if (snapshot.exists()) applyRemoteRoomState(snapshot.val());
+        else setConnectionStatus('Waiting for the host to create this room');
+      },
+      () => setConnectionStatus('Live updates unavailable — refresh to get the latest room state'),
+    );
+  }, [applyRemoteRoomState, joined, roomCode]);
 
   const createRoom = async () => {
     if (!name.trim()) {
@@ -308,14 +307,16 @@ function App() {
     }
 
     const existingRoom = await readStoredRoom(nextRoomCode);
-    const roomToJoin = existingRoom || createRoomState(nextRoomCode, {
-      roomTitle: roomTitle || 'Sprint Planning',
-      selectedScaleId: selectedScaleId || defaultScales[0].id,
-      revealed: false,
-      votes: [],
-      participants: [],
-      activityLog: [],
-    });
+    if (!existingRoom) {
+      setJoinError(
+        database
+          ? 'Room not found. Check the invite link or ask the host to create the room first.'
+          : 'Cloud sync is not configured. Add the Firebase settings before joining from another device.',
+      );
+      return;
+    }
+
+    const roomToJoin = existingRoom;
 
     const nextParticipantId = `${slugify(name)}-${Date.now()}`;
     participantIdRef.current = nextParticipantId;
@@ -333,7 +334,7 @@ function App() {
     setVotes(nextVotes);
     setActivityLog(nextActivityLog);
     setJoinError('');
-    setConnectionStatus(existingRoom ? 'Joined room' : 'Joined room (created locally)');
+    setConnectionStatus(database ? 'Joined room' : 'Joined local room');
 
     await persistRoom({
       roomCode: nextRoomCode,

@@ -34,6 +34,21 @@ test('falls back to local room state when no remote state exists', () => {
   assert.equal(result?.selectedScaleId, 'linear-1-8');
 });
 
+test('accepts empty arrays from a remote reset', () => {
+  const result = resolveRoomState({
+    roomCode: 'XYZ789',
+    votes: [{ id: 'participant-1', name: 'Alex', vote: '8' }],
+    activityLog: [{ id: 'join-1', text: 'Alex joined' }],
+  }, {
+    roomCode: 'XYZ789',
+    votes: [],
+    activityLog: [],
+  });
+
+  assert.deepEqual(result?.votes, []);
+  assert.deepEqual(result?.activityLog, []);
+});
+
 test('creates a provisional room state when no stored room exists', () => {
   const result = createRoomState('ABC999', {
     roomTitle: 'New room',

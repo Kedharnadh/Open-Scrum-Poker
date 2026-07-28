@@ -39,16 +39,21 @@ export function resolveRoomState(localRoomState, remoteRoomState) {
     return localRoom;
   }
 
+  const hasRemoteArray = (camelCase, snakeCase) => (
+    Array.isArray(remoteRoomState?.[camelCase]) || Array.isArray(remoteRoomState?.[snakeCase])
+  );
+
   return {
     ...localRoom,
     ...remoteRoom,
     roomCode: remoteRoom.roomCode || localRoom.roomCode,
-    roomTitle: remoteRoom.roomTitle || localRoom.roomTitle,
-    selectedScaleId: remoteRoom.selectedScaleId || localRoom.selectedScaleId,
+    roomTitle: remoteRoomState?.roomTitle ?? remoteRoomState?.room_title ?? localRoom.roomTitle,
+    selectedScaleId: remoteRoomState?.selectedScaleId ?? remoteRoomState?.selected_scale_id ?? localRoom.selectedScaleId,
     revealed: typeof remoteRoomState?.revealed === 'boolean' ? remoteRoom.revealed : localRoom.revealed,
-    votes: remoteRoom.votes.length ? remoteRoom.votes : localRoom.votes,
-    participants: remoteRoom.participants.length ? remoteRoom.participants : localRoom.participants,
-    activityLog: remoteRoom.activityLog.length ? remoteRoom.activityLog : localRoom.activityLog,
+    // An empty remote array is meaningful: it may be the result of a reset or leave.
+    votes: hasRemoteArray('votes', 'votes') ? remoteRoom.votes : localRoom.votes,
+    participants: hasRemoteArray('participants', 'participants') ? remoteRoom.participants : localRoom.participants,
+    activityLog: hasRemoteArray('activityLog', 'activity_log') ? remoteRoom.activityLog : localRoom.activityLog,
   };
 }
 

@@ -32,11 +32,11 @@
                          │
         ┌────────────────┴────────────────┐
         │                                 │
-  Anonymous Auth                  Supabase Realtime
+  Anonymous Auth                  Firebase Realtime Database
         │                                 │
         └────────────────┬────────────────┘
                          │
-                  PostgreSQL Database
+                  Firebase Realtime Database
                          │
               Storage / Edge Functions
 ```
@@ -56,9 +56,9 @@
 | Forms | React Hook Form |
 | Validation | Zod |
 | Routing | React Router |
-| Backend | Supabase |
-| Database | PostgreSQL |
-| Realtime | Supabase Realtime |
+| Backend | Firebase |
+| Database | Firebase Realtime Database |
+| Realtime | Firebase Realtime Database |
 | Hosting | Cloudflare Pages |
 | Authentication | Anonymous Auth |
 | Testing | Vitest + React Testing Library + Playwright |
