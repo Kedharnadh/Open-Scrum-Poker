@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Scrum poker icon">
+  <rect width="128" height="128" rx="28" fill="#4f46e5" />
+  <path d="M36 34h56a8 8 0 0 1 8 8v44a8 8 0 0 1-8 8H36a8 8 0 0 1-8-8V42a8 8 0 0 1 8-8Z" fill="#ffffff" fill-opacity="0.96" />
+  <path d="M44 48h40M44 64h24M44 80h16" stroke="#4f46e5" stroke-width="8" stroke-linecap="round" />
+</svg>

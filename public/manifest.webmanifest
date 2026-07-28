@@ -1,0 +1,15 @@
+{
+  "name": "Scrum Poker Demo",
+  "short_name": "Scrum Poker",
+  "start_url": "/Open-Scrum-Poker/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/Open-Scrum-Poker/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
