@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Peer } from 'peerjs';
 
-const cardValues = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?'];
 const storageKey = 'scrum-poker-demo-state-v1';
+const defaultScales = [
+  { id: 'linear-1-8', name: 'Linear 1-8', values: ['1', '2', '3', '4', '5', '6', '7', '8', '?'] },
+  { id: 'fibonacci', name: 'Fibonacci', values: ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?'] },
+  { id: 'tshirt', name: 'T-Shirt', values: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '?'] },
+  { id: 'days', name: 'Days', values: ['1', '2', '3', '5', '8', '13', '?'] },
+];
 
 function generateRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -30,31 +35,47 @@ function upsertVoteEntry(votes, entry) {
   return [...nextVotes, entry];
 }
 
-function buildJoinLink(roomCode, hostPeerId) {
+function slugify(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+function buildJoinLink(roomCode, hostPeerId, roomTitle, selectedScaleId) {
   const params = new URLSearchParams(window.location.search);
   params.set('room', roomCode);
   params.set('host', hostPeerId);
+  params.set('title', roomTitle || '');
+  params.set('scale', selectedScaleId || '');
   return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 }
 
 function App() {
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
+  const [roomTitle, setRoomTitle] = useState('Sprint Planning');
   const [joined, setJoined] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [selectedVote, setSelectedVote] = useState(null);
   const [votes, setVotes] = useState([]);
   const [isHost, setIsHost] = useState(false);
   const [peerId, setPeerId] = useState('');
+  const [hostPeerId, setHostPeerId] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('Ready to connect');
   const [joinLink, setJoinLink] = useState('');
+  const [selectedScaleId, setSelectedScaleId] = useState(defaultScales[0].id);
+  const [customScales, setCustomScales] = useState([]);
+  const [customScaleName, setCustomScaleName] = useState('');
+  const [customScaleValuesInput, setCustomScaleValuesInput] = useState('');
 
   const peerRef = useRef(null);
   const connectionRef = useRef(null);
   const connectionsRef = useRef(new Map());
   const roomCodeRef = useRef(roomCode);
   const revealedRef = useRef(revealed);
-  const nameRef = useRef(name);
+  const roomTitleRef = useRef(roomTitle);
+  const selectedScaleIdRef = useRef(selectedScaleId);
 
   useEffect(() => {
     roomCodeRef.current = roomCode;
@@ -65,8 +86,12 @@ function App() {
   }, [revealed]);
 
   useEffect(() => {
-    nameRef.current = name;
-  }, [name]);
+    roomTitleRef.current = roomTitle;
+  }, [roomTitle]);
+
+  useEffect(() => {
+    selectedScaleIdRef.current = selectedScaleId;
+  }, [selectedScaleId]);
 
   useEffect(() => {
     try {
@@ -75,11 +100,20 @@ function App() {
         const params = new URLSearchParams(window.location.search);
         const roomFromUrl = params.get('room');
         const hostFromUrl = params.get('host');
+        const titleFromUrl = params.get('title');
+        const scaleFromUrl = params.get('scale');
         if (roomFromUrl) {
           setRoomCode(roomFromUrl.toUpperCase());
         }
+        if (titleFromUrl) {
+          setRoomTitle(titleFromUrl);
+        }
+        if (scaleFromUrl) {
+          setSelectedScaleId(scaleFromUrl);
+        }
         if (hostFromUrl) {
-          setJoinLink(buildJoinLink(roomFromUrl || '', hostFromUrl));
+          setHostPeerId(hostFromUrl);
+          setJoinLink(buildJoinLink(roomFromUrl || '', hostFromUrl, titleFromUrl || '', scaleFromUrl || ''));
         }
         return;
       }
@@ -87,11 +121,14 @@ function App() {
       const parsed = JSON.parse(saved);
       setName(parsed.name || '');
       setRoomCode(parsed.roomCode || '');
+      setRoomTitle(parsed.roomTitle || 'Sprint Planning');
       setJoined(Boolean(parsed.joined));
       setRevealed(Boolean(parsed.revealed));
       setSelectedVote(parsed.selectedVote ?? null);
       setVotes(parsed.votes || []);
       setIsHost(Boolean(parsed.isHost));
+      setSelectedScaleId(parsed.selectedScaleId || defaultScales[0].id);
+      setCustomScales(parsed.customScales || []);
     } catch (error) {
       console.error('Unable to restore state', error);
     }
@@ -105,17 +142,32 @@ function App() {
     } else {
       params.delete('room');
     }
+    params.set('title', roomTitle || 'Sprint Planning');
     if (joinLink) {
       params.set('host', new URL(joinLink).searchParams.get('host') || '');
     }
+    if (selectedScaleId) {
+      params.set('scale', selectedScaleId);
+    }
     const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
     window.history.replaceState({}, '', nextUrl);
-  }, [roomCode, joinLink]);
+  }, [roomCode, roomTitle, joinLink, selectedScaleId]);
 
   useEffect(() => {
-    const payload = { name, roomCode, joined, revealed, selectedVote, votes, isHost };
+    const payload = {
+      name,
+      roomCode,
+      roomTitle,
+      joined,
+      revealed,
+      selectedVote,
+      votes,
+      isHost,
+      selectedScaleId,
+      customScales,
+    };
     window.localStorage.setItem(storageKey, JSON.stringify(payload));
-  }, [name, roomCode, joined, revealed, selectedVote, votes, isHost]);
+  }, [name, roomCode, roomTitle, joined, revealed, selectedVote, votes, isHost, selectedScaleId, customScales]);
 
   const disconnectPeer = useCallback(() => {
     if (peerRef.current) {
@@ -124,12 +176,16 @@ function App() {
     }
     connectionRef.current = null;
     connectionsRef.current.clear();
+    setPeerId('');
+    setHostPeerId('');
   }, []);
 
-  const broadcastState = useCallback((nextVotes, nextRevealed) => {
+  const broadcastState = useCallback((nextVotes, nextRevealed, nextRoomTitle, nextScaleId) => {
     const payload = {
       type: 'state',
       roomCode: roomCodeRef.current,
+      roomTitle: nextRoomTitle,
+      selectedScaleId: nextScaleId,
       revealed: nextRevealed,
       votes: nextVotes,
     };
@@ -157,7 +213,7 @@ function App() {
       setPeerId(id);
       setConnectionStatus(role === 'host' ? 'Hosting room' : 'Connecting to host');
       if (role === 'host') {
-        const nextLink = buildJoinLink(roomCodeRef.current, id);
+        const nextLink = buildJoinLink(roomCodeRef.current, id, roomTitleRef.current, selectedScaleIdRef.current);
         setJoinLink(nextLink);
       }
     });
@@ -171,6 +227,8 @@ function App() {
         const initialPayload = {
           type: 'state',
           roomCode: roomCodeRef.current,
+          roomTitle: roomTitleRef.current,
+          selectedScaleId: selectedScaleIdRef.current,
           revealed: revealedRef.current,
           votes,
         };
@@ -187,13 +245,15 @@ function App() {
 
           setVotes((current) => {
             const nextVotes = upsertVoteEntry(current, entry);
-            broadcastState(nextVotes, revealedRef.current);
+            broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
             return nextVotes;
           });
         }
 
         if (payload?.type === 'state') {
           setRevealed(Boolean(payload.revealed));
+          setRoomTitle(payload.roomTitle || roomTitleRef.current);
+          setSelectedScaleId(payload.selectedScaleId || selectedScaleIdRef.current);
           setVotes(payload.votes || []);
         }
       });
@@ -211,12 +271,12 @@ function App() {
     peerRef.current = peer;
   }, [broadcastState, votes]);
 
-  const connectToHost = useCallback((hostPeerId) => {
-    if (!peerRef.current || !hostPeerId) {
+  const connectToHost = useCallback((hostPeerIdValue) => {
+    if (!peerRef.current || !hostPeerIdValue) {
       return;
     }
 
-    const connection = peerRef.current.connect(hostPeerId, {
+    const connection = peerRef.current.connect(hostPeerIdValue, {
       reliable: true,
     });
 
@@ -236,9 +296,15 @@ function App() {
       connection.send(joinPayload);
     });
 
+    connection.on('error', () => {
+      setConnectionStatus('Could not reach the host. Please refresh and try again.');
+    });
+
     connection.on('data', (payload) => {
       if (payload?.type === 'state') {
         setRevealed(Boolean(payload.revealed));
+        setRoomTitle(payload.roomTitle || roomTitleRef.current);
+        setSelectedScaleId(payload.selectedScaleId || selectedScaleIdRef.current);
         setVotes(payload.votes || []);
       }
     });
@@ -248,7 +314,17 @@ function App() {
     });
   }, [name, peerId, selectedVote]);
 
-  const numericVotes = useMemo(() => votes.map((entry) => Number(entry.vote)).filter((value) => !Number.isNaN(value)), [votes]);
+  const scaleOptions = useMemo(() => [...defaultScales, ...customScales], [customScales]);
+  const activeScale = useMemo(() => {
+    const scale = scaleOptions.find((item) => item.id === selectedScaleId);
+    return scale || defaultScales[0];
+  }, [scaleOptions, selectedScaleId]);
+
+  const numericVotes = useMemo(() => {
+    return votes
+      .map((entry) => Number(entry.vote))
+      .filter((value) => !Number.isNaN(value));
+  }, [votes]);
 
   const createRoom = () => {
     const nextRoom = generateRoomCode();
@@ -264,6 +340,11 @@ function App() {
 
   const joinRoom = () => {
     if (!name.trim() || !roomCode.trim()) return;
+    const params = new URLSearchParams(window.location.search);
+    const hostFromUrl = params.get('host');
+    if (hostFromUrl) {
+      setHostPeerId(hostFromUrl);
+    }
     setIsHost(false);
     setRevealed(false);
     setSelectedVote(null);
@@ -274,30 +355,40 @@ function App() {
   };
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const hostFromUrl = params.get('host');
-    if (joined && !isHost && hostFromUrl && peerRef.current?.open) {
-      connectToHost(hostFromUrl);
-    }
-  }, [joined, isHost, connectToHost]);
+    if (!joined || isHost || !hostPeerId || !peerId) return;
+    connectToHost(hostPeerId);
+  }, [joined, isHost, hostPeerId, peerId, connectToHost]);
 
   useEffect(() => {
-    if (!joined || isHost || !roomCode) return;
-    const params = new URLSearchParams(window.location.search);
-    const hostFromUrl = params.get('host');
-    if (hostFromUrl && peerRef.current?.open) {
-      connectToHost(hostFromUrl);
-    }
-  }, [joined, isHost, roomCode, connectToHost]);
-
-  useEffect(() => {
-    if (!joined || !isHost) return;
     const params = new URLSearchParams(window.location.search);
     const hostFromUrl = params.get('host');
     if (hostFromUrl) {
-      setJoinLink(buildJoinLink(roomCode, hostFromUrl));
+      setHostPeerId(hostFromUrl);
     }
-  }, [joined, isHost, roomCode]);
+  }, []);
+
+  const addCustomScale = () => {
+    if (!customScaleName.trim() || !customScaleValuesInput.trim()) return;
+    const values = customScaleValuesInput
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (!values.length) return;
+
+    const nextScale = {
+      id: slugify(customScaleName),
+      name: customScaleName.trim(),
+      values,
+    };
+
+    setCustomScales((current) => {
+      const nextCustomScales = current.filter((entry) => entry.id !== nextScale.id);
+      return [...nextCustomScales, nextScale];
+    });
+    setSelectedScaleId(nextScale.id);
+    setCustomScaleName('');
+    setCustomScaleValuesInput('');
+  };
 
   const submitVote = (value) => {
     if (!joined) return;
@@ -313,7 +404,7 @@ function App() {
     setVotes((current) => {
       const nextVotes = upsertVoteEntry(current, entry);
       if (isHost) {
-        broadcastState(nextVotes, revealedRef.current);
+        broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
       } else if (connectionRef.current?.open) {
         connectionRef.current.send({ type: 'vote', entry });
       }
@@ -325,7 +416,7 @@ function App() {
     const nextValue = !revealed;
     setRevealed(nextValue);
     if (isHost) {
-      broadcastState(votes, nextValue);
+      broadcastState(votes, nextValue, roomTitleRef.current, selectedScaleIdRef.current);
     } else if (connectionRef.current?.open) {
       connectionRef.current.send({ type: 'vote', entry: { id: peerId || `${name}-${Date.now()}`, name, vote: selectedVote ?? null } });
     }
@@ -337,18 +428,18 @@ function App() {
     const nextVotes = votes.map((entry) => ({ ...entry, vote: null }));
     setVotes(nextVotes);
     if (isHost) {
-      broadcastState(nextVotes, false);
+      broadcastState(nextVotes, false, roomTitleRef.current, selectedScaleIdRef.current);
     }
   };
 
   const addDemoVote = () => {
     const demoName = `Guest ${votes.length + 1}`;
-    const demoVote = cardValues[Math.floor(Math.random() * cardValues.length)];
+    const demoVote = activeScale.values[Math.floor(Math.random() * activeScale.values.length)];
     const entry = { id: `${demoName}-${Date.now()}`, name: demoName, vote: demoVote };
     setVotes((current) => {
       const nextVotes = upsertVoteEntry(current, entry);
       if (isHost) {
-        broadcastState(nextVotes, revealedRef.current);
+        broadcastState(nextVotes, revealedRef.current, roomTitleRef.current, selectedScaleIdRef.current);
       }
       return nextVotes;
     });
@@ -362,7 +453,7 @@ function App() {
     setRevealed(false);
     setRoomCode('');
     setIsHost(false);
-    setPeerId('');
+    setHostPeerId('');
     setJoinLink('');
     setConnectionStatus('Ready to connect');
   };
@@ -382,7 +473,7 @@ function App() {
       <header className="hero-card">
         <div>
           <p className="eyebrow">GitHub Pages • Live sync</p>
-          <h1>Scrum Poker Demo</h1>
+          <h1>{roomTitle || 'Scrum Poker Room'}</h1>
           <p>Join from a second device and watch the room update in real time.</p>
         </div>
         <div className="pill">{joined ? `Room ${roomCode}` : 'Not joined'}</div>
@@ -396,9 +487,36 @@ function App() {
             <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex" />
           </label>
           <label>
+            Room title
+            <input value={roomTitle} onChange={(event) => setRoomTitle(event.target.value)} placeholder="Sprint Planning" />
+          </label>
+          <label>
             Room code
             <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" />
           </label>
+          <label>
+            Estimation scale
+            <select value={selectedScaleId} onChange={(event) => setSelectedScaleId(event.target.value)}>
+              {scaleOptions.map((scale) => (
+                <option key={scale.id} value={scale.id}>
+                  {scale.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="scale-builder">
+            <input
+              value={customScaleName}
+              onChange={(event) => setCustomScaleName(event.target.value)}
+              placeholder="New scale name"
+            />
+            <input
+              value={customScaleValuesInput}
+              onChange={(event) => setCustomScaleValuesInput(event.target.value)}
+              placeholder="Values, separated, by commas"
+            />
+            <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
+          </div>
           <div className="button-row">
             <button onClick={createRoom}>Create room</button>
             <button className="secondary" onClick={joinRoom}>Join room</button>
@@ -411,7 +529,7 @@ function App() {
             <div className="section-head">
               <div>
                 <p className="eyebrow">Live session</p>
-                <h2>{roomCode}</h2>
+                <h2>{roomTitle}</h2>
               </div>
               <div className="button-row compact">
                 <button onClick={revealVotes}>{revealed ? 'Hide votes' : 'Reveal votes'}</button>
@@ -432,7 +550,7 @@ function App() {
           <section className="card">
             <h3>Choose your estimate</h3>
             <div className="card-grid">
-              {cardValues.map((value) => (
+              {activeScale.values.map((value) => (
                 <button
                   key={value}
                   className={`vote-card ${selectedVote === value ? 'selected' : ''}`}
