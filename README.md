@@ -56,6 +56,6 @@ device and does not let participants join a room that is not locally available.
 3. Choose GitHub Actions as the source.
 4. The workflow in `.github/workflows/deploy.yml` will build and publish the app automatically.
 
-Your app will be available at:
+App will be available at:
 
-https://<your-username>.github.io/Open-Scrum-Poker/
+https://kedharnadh.github.io/Open-Scrum-Poker/
