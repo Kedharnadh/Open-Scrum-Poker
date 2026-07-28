@@ -19,6 +19,27 @@ export function normalizeRoomState(payload) {
   };
 }
 
+export function resolveRoomState(localRoomState, remoteRoomState) {
+  const localRoom = normalizeRoomState(localRoomState);
+  const remoteRoom = normalizeRoomState(remoteRoomState);
+
+  if (!remoteRoom.roomCode) {
+    return localRoom;
+  }
+
+  return {
+    ...localRoom,
+    ...remoteRoom,
+    roomCode: remoteRoom.roomCode || localRoom.roomCode,
+    roomTitle: remoteRoom.roomTitle || localRoom.roomTitle,
+    selectedScaleId: remoteRoom.selectedScaleId || localRoom.selectedScaleId,
+    revealed: typeof remoteRoomState?.revealed === 'boolean' ? remoteRoom.revealed : localRoom.revealed,
+    votes: remoteRoom.votes.length ? remoteRoom.votes : localRoom.votes,
+    participants: remoteRoom.participants.length ? remoteRoom.participants : localRoom.participants,
+    activityLog: remoteRoom.activityLog.length ? remoteRoom.activityLog : localRoom.activityLog,
+  };
+}
+
 export function buildRoomPayload(state) {
   return {
     roomCode: state.roomCode,

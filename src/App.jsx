@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './services/supabaseClient';
-import { normalizeRoomState, removeParticipantVote, upsertVoteEntry } from './services/roomState';
+import { normalizeRoomState, removeParticipantVote, resolveRoomState, upsertVoteEntry } from './services/roomState';
 
 const storageKey = 'scrum-poker-demo-state-v1';
 const defaultScales = [
@@ -175,12 +175,40 @@ function App() {
 
   const getRoomStorageKey = useCallback((code) => `scrum-poker-room:${(code || '').toUpperCase()}`, []);
 
-  const readStoredRoom = useCallback((code) => {
+  const readStoredRoom = useCallback(async (code) => {
     try {
       const normalizedCode = (code || '').toUpperCase();
       const storedValue = window.localStorage.getItem(getRoomStorageKey(normalizedCode));
-      if (!storedValue) return null;
-      return normalizeRoomState(JSON.parse(storedValue));
+      const localRoom = storedValue ? normalizeRoomState(JSON.parse(storedValue)) : null;
+
+      if (!supabase) {
+        return localRoom ? resolveRoomState(localRoom, null) : null;
+      }
+
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('room_code', normalizedCode)
+        .maybeSingle();
+
+      if (error) {
+        console.warn('Unable to fetch room from Supabase', error.message);
+        return localRoom ? resolveRoomState(localRoom, null) : null;
+      }
+
+      if (!data) {
+        return localRoom ? resolveRoomState(localRoom, null) : null;
+      }
+
+      return resolveRoomState(localRoom, {
+        roomCode: data.room_code,
+        roomTitle: data.room_title,
+        selectedScaleId: data.selected_scale_id,
+        revealed: data.revealed,
+        votes: data.votes,
+        participants: data.participants,
+        activityLog: data.activity_log,
+      });
     } catch (error) {
       console.error('Unable to load room state', error);
       return null;
@@ -279,7 +307,7 @@ function App() {
       return;
     }
 
-    const existingRoom = readStoredRoom(nextRoomCode);
+    const existingRoom = await readStoredRoom(nextRoomCode);
     if (!existingRoom) {
       setJoined(false);
       setJoinError('No room found yet. Create it first, then share the invite link.');
