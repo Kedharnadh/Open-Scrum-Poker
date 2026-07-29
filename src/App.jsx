@@ -472,9 +472,8 @@ function App() {
     <div className="app-shell">
       <header className="hero-card">
         <div>
-          <p className="eyebrow">GitHub Pages • Room state</p>
+          <p className="eyebrow">Scrum Poker</p>
           <h1>{roomTitle || 'Scrum Poker Room'}</h1>
-          <p>Open the invite link from another device and enter your name before joining.</p>
         </div>
         <div className="pill">{joined ? `Room ${roomCode}` : 'Not joined'}</div>
       </header>
