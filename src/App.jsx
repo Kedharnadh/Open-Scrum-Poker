@@ -517,7 +517,7 @@ function App() {
             <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
           </div>
           <div className="button-row">
-            <button onClick={createRoom}>Create room</button>
+            {!new URLSearchParams(window.location.search).has('room') ? <button onClick={createRoom}>Create room</button> : null}
             <button className="secondary" onClick={joinRoom}>Join room</button>
           </div>
           {joinError ? <p className="muted status-line">{joinError}</p> : null}
