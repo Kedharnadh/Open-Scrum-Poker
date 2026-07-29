@@ -103,12 +103,6 @@ button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
   flex-wrap: wrap;
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 14px;
-}
-
 .participant-list {
   list-style: none;
   padding: 0;

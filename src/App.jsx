@@ -16,22 +16,6 @@ function generateRoomCode() {
   return Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
 }
 
-function calculateAverage(values) {
-  if (!values.length) return '—';
-  const sum = values.reduce((total, value) => total + value, 0);
-  return (sum / values.length).toFixed(1);
-}
-
-function calculateMedian(values) {
-  if (!values.length) return '—';
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return ((sorted[middle - 1] + sorted[middle]) / 2).toFixed(1);
-  }
-  return sorted[middle].toFixed(1);
-}
-
 function slugify(value) {
   return value
     .toLowerCase()
@@ -258,6 +242,34 @@ function App() {
     );
   }, [applyRemoteRoomState, joined, roomCode]);
 
+  useEffect(() => {
+    if (!joined || !roomCode || !database) return;
+
+    const cleanup = () => {
+      const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
+      const nextActivityLog = [
+        { id: `leave-${Date.now()}`, text: `${name || 'A participant'} left the room` },
+        ...activityLogRef.current,
+      ].slice(0, 8);
+      set(ref(database, `rooms/${roomCodeRef.current}`), {
+        roomCode: roomCodeRef.current,
+        roomTitle: roomTitleRef.current,
+        selectedScaleId: selectedScaleIdRef.current,
+        revealed: false,
+        votes: nextVotes,
+        participants: [],
+        activityLog: nextActivityLog,
+      });
+    };
+
+    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('pagehide', cleanup);
+    return () => {
+      window.removeEventListener('beforeunload', cleanup);
+      window.removeEventListener('pagehide', cleanup);
+    };
+  }, [joined, roomCode, database, name]);
+
   const createRoom = async () => {
     if (!name.trim()) {
       setJoinError('Please enter your name before creating a room.');
@@ -376,12 +388,6 @@ function App() {
     return scale || defaultScales[0];
   }, [scaleOptions, selectedScaleId]);
 
-  const numericVotes = useMemo(() => {
-    return votes
-      .map((entry) => Number(entry.vote))
-      .filter((value) => !Number.isNaN(value));
-  }, [votes]);
-
   const submitVote = async (value) => {
     if (!joined) return;
     const normalizedVote = String(value);
@@ -424,21 +430,6 @@ function App() {
     await persistRoom({
       votes: nextVotes,
       revealed: false,
-      roomTitle: roomTitleRef.current,
-      selectedScaleId: selectedScaleIdRef.current,
-      activityLog: activityLogRef.current,
-    });
-  };
-
-  const addDemoVote = async () => {
-    const demoName = `Guest ${votesRef.current.length + 1}`;
-    const demoVote = activeScale.values[Math.floor(Math.random() * activeScale.values.length)];
-    const entry = { id: `${demoName}-${Date.now()}`, name: demoName, vote: demoVote };
-    const nextVotes = upsertVoteEntry(votesRef.current, entry);
-    setVotes(nextVotes);
-    await persistRoom({
-      votes: nextVotes,
-      revealed,
       roomTitle: roomTitleRef.current,
       selectedScaleId: selectedScaleIdRef.current,
       activityLog: activityLogRef.current,
@@ -572,24 +563,20 @@ function App() {
             </div>
           </section>
 
-          <section className="card stats-card">
-            <div className="stats-grid">
-              <div>
-                <p className="eyebrow">Votes</p>
-                <h3>{votes.length}</h3>
-              </div>
-              <div>
-                <p className="eyebrow">Average</p>
-                <h3>{calculateAverage(numericVotes)}</h3>
-              </div>
-              <div>
-                <p className="eyebrow">Median</p>
-                <h3>{calculateMedian(numericVotes)}</h3>
-              </div>
-            </div>
-            <div className="button-row compact">
-              <button className="secondary" onClick={addDemoVote}>Add demo vote</button>
-            </div>
+          <section className="card">
+            <h3>Participants</h3>
+            <ul className="participant-list">
+              {votes.length === 0 ? (
+                <li className="muted">No one has voted yet.</li>
+              ) : (
+                votes.map((entry) => (
+                  <li key={`${entry.id}-${entry.name}`}>
+                    <span>{entry.name}</span>
+                    <strong>{revealed ? entry.vote ?? '—' : entry.vote ? '✓' : 'Pending'}</strong>
+                  </li>
+                ))
+              )}
+            </ul>
           </section>
 
           <section className="card">
@@ -602,22 +589,6 @@ function App() {
                   <li key={entry.id}>
                     <span>{entry.text}</span>
                     <strong>Live</strong>
-                  </li>
-                ))
-              )}
-            </ul>
-          </section>
-
-          <section className="card">
-            <h3>Participants</h3>
-            <ul className="participant-list">
-              {votes.length === 0 ? (
-                <li className="muted">No one has voted yet.</li>
-              ) : (
-                votes.map((entry) => (
-                  <li key={`${entry.id}-${entry.name}`}>
-                    <span>{entry.name}</span>
-                    <strong>{revealed ? entry.vote ?? '—' : entry.vote ? '✓' : 'Pending'}</strong>
                   </li>
                 ))
               )}
