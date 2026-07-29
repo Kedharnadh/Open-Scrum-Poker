@@ -150,6 +150,28 @@ select {
   color: white;
 }
 
+.room-body {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.room-body .participants-column {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+@media (max-width: 860px) {
+  .room-body {
+    grid-template-columns: 1fr;
+  }
+  .room-body .participants-column {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
 @media (max-width: 680px) {
   .app-shell { padding: 14px; }
   .hero-card { flex-direction: column; align-items: flex-start; }

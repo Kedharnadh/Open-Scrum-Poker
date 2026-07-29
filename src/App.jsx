@@ -548,52 +548,54 @@ function App() {
             ) : null}
           </section>
 
-          <section className="card">
-            <h3>Choose your estimate</h3>
-            <div className="card-grid">
-              {activeScale.values.map((value) => (
-                <button
-                  key={value}
-                  className={`vote-card ${selectedVote === value ? 'selected' : ''}`}
-                  onClick={() => submitVote(value)}
-                >
-                  {value}
-                </button>
-              ))}
-            </div>
-          </section>
+          <div className="room-body">
+            <section className="card">
+              <h3>Choose your estimate</h3>
+              <div className="card-grid">
+                {activeScale.values.map((value) => (
+                  <button
+                    key={value}
+                    className={`vote-card ${selectedVote === value ? 'selected' : ''}`}
+                    onClick={() => submitVote(value)}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </section>
 
-          <section className="card">
-            <h3>Participants</h3>
-            <ul className="participant-list">
-              {votes.length === 0 ? (
-                <li className="muted">No one has voted yet.</li>
-              ) : (
-                votes.map((entry) => (
-                  <li key={`${entry.id}-${entry.name}`}>
-                    <span>{entry.name}</span>
-                    <strong>{revealed ? entry.vote ?? '—' : entry.vote ? '✓' : 'Pending'}</strong>
-                  </li>
-                ))
-              )}
-            </ul>
-          </section>
+            <section className="card participants-column">
+              <h3>Participants</h3>
+              <ul className="participant-list">
+                {votes.length === 0 ? (
+                  <li className="muted">No one has voted yet.</li>
+                ) : (
+                  votes.map((entry) => (
+                    <li key={`${entry.id}-${entry.name}`}>
+                      <span>{entry.name}</span>
+                      <strong>{revealed ? entry.vote ?? '—' : entry.vote ? '✓' : 'Pending'}</strong>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </section>
 
-          <section className="card">
-            <h3>Activity</h3>
-            <ul className="participant-list">
-              {activityLog.length === 0 ? (
-                <li className="muted">No activity yet.</li>
-              ) : (
-                activityLog.map((entry) => (
-                  <li key={entry.id}>
-                    <span>{entry.text}</span>
-                    <strong>Live</strong>
-                  </li>
-                ))
-              )}
-            </ul>
-          </section>
+            <section className="card">
+              <h3>Activity</h3>
+              <ul className="participant-list">
+                {activityLog.length === 0 ? (
+                  <li className="muted">No activity yet.</li>
+                ) : (
+                  activityLog.map((entry) => (
+                    <li key={entry.id}>
+                      <span>{entry.text}</span>
+                      <strong>Live</strong>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </section>
+          </div>
         </>
       )}
     </div>
