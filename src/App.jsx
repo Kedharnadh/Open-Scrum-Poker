@@ -456,6 +456,7 @@ function App() {
     setIsHost(false);
     setJoinLink('');
     setConnectionStatus('Ready to connect');
+    window.history.replaceState({}, '', window.location.pathname);
   };
 
   const copyInviteLink = async () => {
