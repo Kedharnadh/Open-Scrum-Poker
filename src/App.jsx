@@ -115,6 +115,14 @@ function App() {
       setSelectedScaleId(parsed.selectedScaleId || scaleFromUrl || defaultScales[0].id);
       setCustomScales(parsed.customScales || []);
       setActivityLog(parsed.activityLog || []);
+
+      const savedSession = window.localStorage.getItem(`${storageKey}-session`);
+      if (savedSession) {
+        const session = JSON.parse(savedSession);
+        if (session.participantId) {
+          participantIdRef.current = session.participantId;
+        }
+      }
     } catch (error) {
       console.error('Unable to restore state', error);
     }
@@ -152,6 +160,12 @@ function App() {
     };
     window.localStorage.setItem(storageKey, JSON.stringify(payload));
   }, [name, roomCode, roomTitle, joined, revealed, selectedVote, votes, isHost, selectedScaleId, customScales, activityLog]);
+
+  useEffect(() => {
+    if (!joined || !roomCode) return;
+    const payload = { participantId: participantIdRef.current };
+    window.localStorage.setItem(`${storageKey}-session`, JSON.stringify(payload));
+  }, [joined, roomCode]);
 
   useEffect(() => {
     if (!joined || !isHost || !roomCode) return;
@@ -241,34 +255,6 @@ function App() {
       () => setConnectionStatus('Live updates unavailable — refresh to get the latest room state'),
     );
   }, [applyRemoteRoomState, joined, roomCode]);
-
-  useEffect(() => {
-    if (!joined || !roomCode || !database) return;
-
-    const cleanup = () => {
-      const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
-      const nextActivityLog = [
-        { id: `leave-${Date.now()}`, text: `${name || 'A participant'} left the room` },
-        ...activityLogRef.current,
-      ].slice(0, 8);
-      set(ref(database, `rooms/${roomCodeRef.current}`), {
-        roomCode: roomCodeRef.current,
-        roomTitle: roomTitleRef.current,
-        selectedScaleId: selectedScaleIdRef.current,
-        revealed: false,
-        votes: nextVotes,
-        participants: [],
-        activityLog: nextActivityLog,
-      });
-    };
-
-    window.addEventListener('beforeunload', cleanup);
-    window.addEventListener('pagehide', cleanup);
-    return () => {
-      window.removeEventListener('beforeunload', cleanup);
-      window.removeEventListener('pagehide', cleanup);
-    };
-  }, [joined, roomCode, database, name]);
 
   const createRoom = async () => {
     if (!name.trim()) {
