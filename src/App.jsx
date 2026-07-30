@@ -109,17 +109,27 @@ function App() {
       }
 
       const parsed = JSON.parse(saved);
-      setName(parsed.name || '');
-      setRoomCode(parsed.roomCode || roomFromUrl?.toUpperCase() || '');
-      setRoomTitle(parsed.roomTitle || titleFromUrl || 'Sprint Planning');
-      setJoined(Boolean(parsed.joined));
-      setRevealed(Boolean(parsed.revealed));
-      setSelectedVote(parsed.selectedVote ?? null);
-      setVotes(parsed.votes || []);
-      setIsHost(Boolean(parsed.isHost));
-      setSelectedScaleId(parsed.selectedScaleId || scaleFromUrl || defaultScales[0].id);
-      setCustomScales(parsed.customScales || []);
-      setActivityLog(parsed.activityLog || []);
+      const newRoomLink = roomFromUrl && roomFromUrl.toUpperCase() !== (parsed.roomCode || '').toUpperCase();
+
+      if (newRoomLink) {
+        setName(parsed.name || '');
+        setRoomCode(roomFromUrl.toUpperCase());
+        setRoomTitle(titleFromUrl || 'Sprint Planning');
+        setSelectedScaleId(scaleFromUrl || defaultScales[0].id);
+        setCustomScales(parsed.customScales || []);
+      } else {
+        setName(parsed.name || '');
+        setRoomCode(parsed.roomCode || roomFromUrl?.toUpperCase() || '');
+        setRoomTitle(parsed.roomTitle || titleFromUrl || 'Sprint Planning');
+        setJoined(Boolean(parsed.joined));
+        setRevealed(Boolean(parsed.revealed));
+        setSelectedVote(parsed.selectedVote ?? null);
+        setVotes(parsed.votes || []);
+        setIsHost(Boolean(parsed.isHost));
+        setSelectedScaleId(parsed.selectedScaleId || scaleFromUrl || defaultScales[0].id);
+        setCustomScales(parsed.customScales || []);
+        setActivityLog(parsed.activityLog || []);
+      }
 
       const savedSession = window.localStorage.getItem(`${storageKey}-session`);
       if (savedSession) {
@@ -134,7 +144,7 @@ function App() {
       const refreshFlag = window.sessionStorage.getItem('scrum-poker-refresh');
       if (refreshFlag) {
         window.sessionStorage.removeItem('scrum-poker-refresh');
-        const roomCodeValue = parsed.roomCode || roomFromUrl?.toUpperCase() || '';
+        const roomCodeValue = newRoomLink ? roomFromUrl?.toUpperCase() || '' : (parsed.roomCode || roomFromUrl?.toUpperCase() || '');
         if (database && participantIdRef.current && roomCodeValue) {
           const normalizedCode = roomCodeValue.toUpperCase();
           get(ref(database, `rooms/${normalizedCode}`)).then((snapshot) => {
@@ -154,7 +164,7 @@ function App() {
             }
           });
         }
-      } else if (parsed.joined) {
+      } else if (!newRoomLink && parsed.joined) {
         setJoined(false);
       }
     } catch (error) {
