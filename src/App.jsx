@@ -56,6 +56,7 @@ function App() {
   const votesRef = useRef(votes);
   const activityLogRef = useRef(activityLog);
   const participantIdRef = useRef('');
+  const nameRef = useRef(name);
 
   useEffect(() => {
     roomCodeRef.current = roomCode;
@@ -80,6 +81,10 @@ function App() {
   useEffect(() => {
     activityLogRef.current = activityLog;
   }, [activityLog]);
+
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
 
   useEffect(() => {
     try {
@@ -118,10 +123,39 @@ function App() {
 
       const savedSession = window.localStorage.getItem(`${storageKey}-session`);
       if (savedSession) {
-        const session = JSON.parse(savedSession);
-        if (session.participantId) {
-          participantIdRef.current = session.participantId;
+        try {
+          const session = JSON.parse(savedSession);
+          if (session.participantId) {
+            participantIdRef.current = session.participantId;
+          }
+        } catch (e) {}
+      }
+
+      const refreshFlag = window.sessionStorage.getItem('scrum-poker-refresh');
+      if (refreshFlag) {
+        window.sessionStorage.removeItem('scrum-poker-refresh');
+        const roomCodeValue = parsed.roomCode || roomFromUrl?.toUpperCase() || '';
+        if (database && participantIdRef.current && roomCodeValue) {
+          const normalizedCode = roomCodeValue.toUpperCase();
+          get(ref(database, `rooms/${normalizedCode}`)).then((snapshot) => {
+            if (snapshot.exists()) {
+              const room = normalizeRoomState(snapshot.val());
+              const entry = { id: participantIdRef.current, name: parsed.name || '', vote: null };
+              const nextVotes = upsertVoteEntry(room.votes || [], entry);
+              set(ref(database, `rooms/${normalizedCode}`), {
+                roomCode: room.roomCode,
+                roomTitle: room.roomTitle,
+                selectedScaleId: room.selectedScaleId,
+                revealed: room.revealed || false,
+                votes: nextVotes,
+                participants: [],
+                activityLog: room.activityLog || [],
+              });
+            }
+          });
         }
+      } else if (parsed.joined) {
+        setJoined(false);
       }
     } catch (error) {
       console.error('Unable to restore state', error);
@@ -255,6 +289,38 @@ function App() {
       () => setConnectionStatus('Live updates unavailable — refresh to get the latest room state'),
     );
   }, [applyRemoteRoomState, joined, roomCode]);
+
+  useEffect(() => {
+    if (!joined || !roomCode || !database) return;
+
+    const cleanup = () => {
+      try {
+        window.sessionStorage.setItem('scrum-poker-refresh', '1');
+      } catch (e) {}
+
+      const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
+      const nextActivityLog = [
+        { id: `leave-${Date.now()}`, text: `${nameRef.current || 'A participant'} left the room` },
+        ...activityLogRef.current,
+      ].slice(0, 8);
+      set(ref(database, `rooms/${roomCodeRef.current}`), {
+        roomCode: roomCodeRef.current,
+        roomTitle: roomTitleRef.current,
+        selectedScaleId: selectedScaleIdRef.current,
+        revealed: false,
+        votes: nextVotes,
+        participants: [],
+        activityLog: nextActivityLog,
+      });
+    };
+
+    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('pagehide', cleanup);
+    return () => {
+      window.removeEventListener('beforeunload', cleanup);
+      window.removeEventListener('pagehide', cleanup);
+    };
+  }, [joined, roomCode, database, name]);
 
   const createRoom = async () => {
     if (!name.trim()) {
