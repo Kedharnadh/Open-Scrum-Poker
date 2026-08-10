@@ -1,0 +1,60 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    "rooms": {
+      "$roomId": {
+        ".validate": "newData.hasChildren(['roomCode', 'roomTitle', 'revealed', 'hostOnly', 'hostId', 'updatedAt', 'expiresAt']) && newData.child('roomCode').val() === $roomId && newData.child('roomTitle').isString() && newData.child('revealed').isBoolean() && newData.child('hostOnly').isBoolean() && newData.child('hostId').isString() && newData.child('updatedAt').isNumber() && newData.child('expiresAt').isNumber()",
+        "roomCode": {
+          ".validate": "newData.isString() && newData.val() === $roomId"
+        },
+        "roomTitle": {
+          ".validate": "newData.isString() && newData.val().length <= 120"
+        },
+        "selectedScaleId": {
+          ".validate": "newData.isString() && newData.val().length <= 80"
+        },
+        "revealed": {
+          ".validate": "newData.isBoolean()"
+        },
+        "hostOnly": {
+          ".validate": "newData.isBoolean()"
+        },
+        "hostId": {
+          ".validate": "newData.isString() && newData.val().length <= 120"
+        },
+        "updatedAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "expiresAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "votes": {
+          "$participantId": {
+            ".validate": "newData.hasChildren(['name', 'vote']) && newData.child('name').isString() && newData.child('name').val().length <= 80 && (newData.child('vote').isString() || newData.child('vote').val() === null)",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length <= 80"
+            },
+            "vote": {
+              ".validate": "newData.isString() || newData.val() === null"
+            }
+          }
+        },
+        "participants": {
+          "$participantId": {
+            ".validate": "newData.hasChildren(['name', 'online', 'lastSeen']) && newData.child('name').isString() && newData.child('name').val().length <= 80 && newData.child('online').isBoolean() && newData.child('lastSeen').isNumber()",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length <= 80"
+            },
+            "online": {
+              ".validate": "newData.isBoolean()"
+            },
+            "lastSeen": {
+              ".validate": "newData.isNumber()"
+            }
+          }
+        }
+      }
+    }
+  }
+}

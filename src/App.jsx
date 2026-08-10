@@ -1,9 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { get, onValue, ref, set } from 'firebase/database';
-import { database } from './services/firebaseClient';
-import { normalizeRoomState, removeParticipantVote, resolveRoomState, upsertVoteEntry } from './services/roomState';
+import { get, onDisconnect, onValue, ref, remove, set, update } from 'firebase/database';
+import { database, ensureAuth } from './services/firebaseClient';
+import {
+  dedupeVotesByName,
+  isRoomExpired,
+  normalizeRoomState,
+  resolveRoomState,
+  upsertVoteEntry,
+} from './services/roomState';
 
-const storageKey = 'scrum-poker-demo-state-v1';
+const nameKey = 'scrum-poker-demo-name';
+const draftKey = 'scrum-poker-demo-draft';
+const lastRoomKey = 'scrum-poker-demo-last-room';
+const participantIdKey = 'scrum-poker-demo-participant-id';
+const customScalesKey = 'scrum-poker-demo-custom-scales';
+const refreshFlagKey = 'scrum-poker-refresh';
+const ROOM_TTL_MS = 48 * 60 * 60 * 1000;
+const STALE_PRESENCE_MS = 90 * 1000;
+const HEARTBEAT_MS = 30 * 1000;
+
 const defaultScales = [
   { id: 'linear-1-8', name: 'Linear 1-8', values: ['1', '2', '3', '4', '5', '6', '7', '8', '?'] },
   { id: 'fibonacci', name: 'Fibonacci', values: ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?'] },
@@ -23,6 +38,20 @@ function slugify(value) {
     .replace(/(^-|-$)/g, '');
 }
 
+function getOrCreateParticipantId(name) {
+  try {
+    const existing = window.localStorage.getItem(participantIdKey);
+    if (existing) {
+      return existing;
+    }
+    const nextId = `${slugify(name)}-${Date.now()}`;
+    window.localStorage.setItem(participantIdKey, nextId);
+    return nextId;
+  } catch (error) {
+    return `${slugify(name)}-${Date.now()}`;
+  }
+}
+
 function buildJoinLink(roomCode, roomTitle, selectedScaleId) {
   const params = new URLSearchParams(window.location.search);
   params.set('room', roomCode);
@@ -37,142 +66,230 @@ function App() {
   const [roomTitle, setRoomTitle] = useState('Sprint Planning');
   const [joined, setJoined] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [hostOnly, setHostOnly] = useState(false);
   const [selectedVote, setSelectedVote] = useState(null);
   const [votes, setVotes] = useState([]);
+  const [participants, setParticipants] = useState({});
   const [isHost, setIsHost] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('Ready to connect');
+  const [canRetry, setCanRetry] = useState(false);
   const [joinLink, setJoinLink] = useState('');
   const [selectedScaleId, setSelectedScaleId] = useState(defaultScales[0].id);
   const [customScales, setCustomScales] = useState([]);
   const [customScaleName, setCustomScaleName] = useState('');
   const [customScaleValuesInput, setCustomScaleValuesInput] = useState('');
-  const [activityLog, setActivityLog] = useState([]);
   const [joinError, setJoinError] = useState('');
+  const [listenerEpoch, setListenerEpoch] = useState(0);
+  const [expired, setExpired] = useState(false);
+  const [authReady, setAuthReady] = useState(!database);
 
   const roomCodeRef = useRef(roomCode);
-  const revealedRef = useRef(revealed);
   const roomTitleRef = useRef(roomTitle);
   const selectedScaleIdRef = useRef(selectedScaleId);
+  const revealedRef = useRef(revealed);
+  const hostOnlyRef = useRef(hostOnly);
   const votesRef = useRef(votes);
-  const activityLogRef = useRef(activityLog);
-  const participantIdRef = useRef('');
+  const participantsRef = useRef(participants);
+  const isHostRef = useRef(isHost);
+  const selectedVoteRef = useRef(selectedVote);
+  const joinedRef = useRef(joined);
   const nameRef = useRef(name);
+  const participantIdRef = useRef('');
+  const participantDisconnectRef = useRef(null);
+  const voteDisconnectRef = useRef(null);
 
   useEffect(() => {
     roomCodeRef.current = roomCode;
-  }, [roomCode]);
-
-  useEffect(() => {
-    revealedRef.current = revealed;
-  }, [revealed]);
-
-  useEffect(() => {
     roomTitleRef.current = roomTitle;
-  }, [roomTitle]);
-
-  useEffect(() => {
     selectedScaleIdRef.current = selectedScaleId;
-  }, [selectedScaleId]);
-
-  useEffect(() => {
+    revealedRef.current = revealed;
+    hostOnlyRef.current = hostOnly;
     votesRef.current = votes;
-  }, [votes]);
-
-  useEffect(() => {
-    activityLogRef.current = activityLog;
-  }, [activityLog]);
-
-  useEffect(() => {
+    participantsRef.current = participants;
+    isHostRef.current = isHost;
+    selectedVoteRef.current = selectedVote;
+    joinedRef.current = joined;
     nameRef.current = name;
+  });
+
+  const getRoomStorageKey = useCallback((code) => `scrum-poker-demo-room:${(code || '').toUpperCase()}`, []);
+
+  const cacheRoomState = useCallback((code, payload) => {
+    const roomCodeValue = code || roomCodeRef.current;
+    if (!roomCodeValue) return;
+    const data = payload || {
+      name: nameRef.current,
+      roomCode: roomCodeValue,
+      roomTitle: roomTitleRef.current,
+      joined: joinedRef.current,
+      revealed: revealedRef.current,
+      hostOnly: hostOnlyRef.current,
+      selectedVote: selectedVoteRef.current,
+      votes: votesRef.current,
+      participants: participantsRef.current,
+      isHost: isHostRef.current,
+      selectedScaleId: selectedScaleIdRef.current,
+    };
+    try {
+      window.localStorage.setItem(getRoomStorageKey(roomCodeValue), JSON.stringify(data));
+      window.localStorage.setItem(lastRoomKey, roomCodeValue);
+    } catch (error) {}
+  }, [getRoomStorageKey]);
+
+  const currentRoomSnapshot = useCallback(() => ({
+    name: nameRef.current,
+    roomCode: roomCodeRef.current,
+    roomTitle: roomTitleRef.current,
+    joined: joinedRef.current,
+    revealed: revealedRef.current,
+    hostOnly: hostOnlyRef.current,
+    selectedVote: selectedVoteRef.current,
+    votes: votesRef.current,
+    participants: participantsRef.current,
+    isHost: isHostRef.current,
+    selectedScaleId: selectedScaleIdRef.current,
+  }), []);
+
+  const registerPresence = useCallback(async (code, id, participantName) => {
+    if (!database || !code || !id) return;
+    const codeValue = code.toUpperCase();
+    const now = Date.now();
+    const cachedVote = votesRef.current.find((entry) => entry.id === id)?.vote ?? null;
+    const updates = {
+      [`participants/${id}`]: { name: participantName, online: true, lastSeen: now },
+      [`votes/${id}`]: { name: participantName, vote: cachedVote },
+      updatedAt: now,
+      expiresAt: now + ROOM_TTL_MS,
+    };
+
+    if (participantDisconnectRef.current) {
+      participantDisconnectRef.current.cancel().catch(() => {});
+      participantDisconnectRef.current = null;
+    }
+    if (voteDisconnectRef.current) {
+      voteDisconnectRef.current.cancel().catch(() => {});
+      voteDisconnectRef.current = null;
+    }
+
+    try {
+      await update(ref(database, `rooms/${codeValue}`), updates);
+      const participantDisconnect = onDisconnect(ref(database, `rooms/${codeValue}/participants/${id}`));
+      const voteDisconnect = onDisconnect(ref(database, `rooms/${codeValue}/votes/${id}`));
+      participantDisconnect.remove();
+      voteDisconnect.remove();
+      participantDisconnectRef.current = participantDisconnect;
+      voteDisconnectRef.current = voteDisconnect;
+    } catch (error) {
+      console.warn('Unable to register presence', error);
+    }
+  }, []);
+
+  const restorePresence = useCallback(async (code, id) => {
+    if (!database || !code || !id) return;
+    const codeValue = code.toUpperCase();
+    try {
+      const snapshot = await get(ref(database, `rooms/${codeValue}`));
+      if (!snapshot.exists()) return;
+      const room = normalizeRoomState(snapshot.val());
+      if (room.participants[id]) return;
+      const nameToUse = nameRef.current
+        || room.votes.find((entry) => entry.id === id)?.name
+        || 'Participant';
+      await registerPresence(codeValue, id, nameToUse);
+    } catch (error) {
+      console.warn('Unable to restore presence', error);
+    }
+  }, [registerPresence]);
+
+  const readStoredRoom = useCallback(async (code) => {
+    try {
+      const normalizedCode = (code || '').toUpperCase();
+      const storedValue = window.localStorage.getItem(getRoomStorageKey(normalizedCode));
+      const localRoom = storedValue ? normalizeRoomState(JSON.parse(storedValue)) : null;
+
+      if (!database) {
+        return localRoom || null;
+      }
+
+      const snapshot = await get(ref(database, `rooms/${normalizedCode}`));
+      if (!snapshot.exists()) {
+        return localRoom || null;
+      }
+      const remote = normalizeRoomState(snapshot.val());
+      if (isRoomExpired(remote)) {
+        remove(ref(database, `rooms/${normalizedCode}`)).catch(() => {});
+        return null;
+      }
+      return resolveRoomState(localRoom, remote);
+    } catch (error) {
+      console.error('Unable to load room state', error);
+      return null;
+    }
+  }, [getRoomStorageKey]);
+
+  const applyRemoteRoomState = useCallback((payload) => {
+    const remoteRoom = normalizeRoomState(payload);
+    if (!remoteRoom.roomCode || remoteRoom.roomCode.toUpperCase() !== roomCodeRef.current.toUpperCase()) return;
+
+    if (isRoomExpired(remoteRoom)) {
+      setExpired(true);
+      setCanRetry(false);
+      remove(ref(database, `rooms/${roomCodeRef.current.toUpperCase()}`)).catch(() => {});
+      return;
+    }
+
+    setRoomTitle(remoteRoom.roomTitle);
+    setSelectedScaleId(remoteRoom.selectedScaleId || defaultScales[0].id);
+    setRevealed(remoteRoom.revealed);
+    setHostOnly(remoteRoom.hostOnly);
+    setVotes(remoteRoom.votes);
+    setParticipants(remoteRoom.participants);
+    const ownVote = remoteRoom.votes.find((entry) => entry.id === participantIdRef.current)?.vote ?? null;
+    setSelectedVote(ownVote);
+    setCanRetry(false);
+    setConnectionStatus('Live connection');
+
+    const now = Date.now();
+    const staleIds = Object.keys(remoteRoom.participants).filter((id) => {
+      const lastSeen = remoteRoom.participants[id]?.lastSeen;
+      return lastSeen && now - lastSeen > STALE_PRESENCE_MS;
+    });
+    if (staleIds.length > 0) {
+      const cleanupUpdates = {};
+      staleIds.forEach((id) => {
+        cleanupUpdates[`participants/${id}`] = null;
+        cleanupUpdates[`votes/${id}`] = null;
+      });
+      update(ref(database, `rooms/${roomCodeRef.current.toUpperCase()}`), cleanupUpdates).catch(() => {});
+    }
+
+    const ownId = participantIdRef.current;
+    const participantPresent = ownId && Boolean(remoteRoom.participants[ownId]);
+    const votePresent = ownId && remoteRoom.votes.some((entry) => entry.id === ownId);
+    const cachedOwnVote = votesRef.current.find((entry) => entry.id === ownId)?.vote;
+    if (joinedRef.current && ownId && (!participantPresent || (!votePresent && cachedOwnVote))) {
+      registerPresence(roomCodeRef.current, ownId, nameRef.current);
+    }
+  }, [registerPresence]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(nameKey, name);
+    } catch (error) {}
   }, [name]);
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(storageKey);
-      const params = new URLSearchParams(window.location.search);
-      const roomFromUrl = params.get('room');
-      const titleFromUrl = params.get('title');
-      const scaleFromUrl = params.get('scale');
+      window.localStorage.setItem(customScalesKey, JSON.stringify(customScales));
+    } catch (error) {}
+  }, [customScales]);
 
-      if (roomFromUrl) {
-        setRoomCode(roomFromUrl.toUpperCase());
-      }
-      if (titleFromUrl) {
-        setRoomTitle(titleFromUrl);
-      }
-      if (scaleFromUrl) {
-        setSelectedScaleId(scaleFromUrl);
-      }
-
-      if (!saved) {
-        return;
-      }
-
-      const parsed = JSON.parse(saved);
-      const newRoomLink = roomFromUrl && roomFromUrl.toUpperCase() !== (parsed.roomCode || '').toUpperCase();
-
-      if (newRoomLink) {
-        setName(parsed.name || '');
-        setRoomCode(roomFromUrl.toUpperCase());
-        setRoomTitle(titleFromUrl || 'Sprint Planning');
-        setSelectedScaleId(scaleFromUrl || defaultScales[0].id);
-        setCustomScales(parsed.customScales || []);
-      } else {
-        setName(parsed.name || '');
-        setRoomCode(parsed.roomCode || roomFromUrl?.toUpperCase() || '');
-        setRoomTitle(parsed.roomTitle || titleFromUrl || 'Sprint Planning');
-        setJoined(Boolean(parsed.joined));
-        setRevealed(Boolean(parsed.revealed));
-        setSelectedVote(parsed.selectedVote ?? null);
-        setVotes(parsed.votes || []);
-        setIsHost(Boolean(parsed.isHost));
-        setSelectedScaleId(parsed.selectedScaleId || scaleFromUrl || defaultScales[0].id);
-        setCustomScales(parsed.customScales || []);
-        setActivityLog(parsed.activityLog || []);
-      }
-
-      const savedSession = window.localStorage.getItem(`${storageKey}-session`);
-      if (savedSession) {
-        try {
-          const session = JSON.parse(savedSession);
-          if (session.participantId) {
-            participantIdRef.current = session.participantId;
-          }
-        } catch (e) {}
-      }
-
-      const refreshFlag = window.sessionStorage.getItem('scrum-poker-refresh');
-      if (refreshFlag) {
-        window.sessionStorage.removeItem('scrum-poker-refresh');
-        const roomCodeValue = newRoomLink ? roomFromUrl?.toUpperCase() || '' : (parsed.roomCode || roomFromUrl?.toUpperCase() || '');
-        if (database && participantIdRef.current && roomCodeValue) {
-          const normalizedCode = roomCodeValue.toUpperCase();
-          get(ref(database, `rooms/${normalizedCode}`)).then((snapshot) => {
-            if (snapshot.exists()) {
-              const room = normalizeRoomState(snapshot.val());
-              const ownVote = (parsed.votes || []).find((item) => item.id === participantIdRef.current)?.vote ?? null;
-              const entry = { id: participantIdRef.current, name: parsed.name || '', vote: ownVote };
-              const nextVotes = upsertVoteEntry(room.votes || [], entry);
-              const nextActivityLog = (room.activityLog || []).filter((logEntry) => logEntry?.participantId !== participantIdRef.current);
-              set(ref(database, `rooms/${normalizedCode}`), {
-                roomCode: room.roomCode,
-                roomTitle: room.roomTitle,
-                selectedScaleId: room.selectedScaleId,
-                revealed: room.revealed || false,
-                votes: nextVotes,
-                participants: [],
-                activityLog: nextActivityLog,
-              });
-            }
-          });
-        }
-      } else if (!newRoomLink && parsed.joined) {
-        setJoined(false);
-      }
-    } catch (error) {
-      console.error('Unable to restore state', error);
-    }
-  }, []);
+  useEffect(() => {
+    if (joined) return;
+    try {
+      window.localStorage.setItem(draftKey, JSON.stringify({ roomTitle, selectedScaleId, roomCode }));
+    } catch (error) {}
+  }, [joined, roomCode, roomTitle, selectedScaleId]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -191,148 +308,200 @@ function App() {
   }, [roomCode, roomTitle, selectedScaleId]);
 
   useEffect(() => {
-    const payload = {
-      name,
-      roomCode,
-      roomTitle,
-      joined,
-      revealed,
-      selectedVote,
-      votes,
-      isHost,
-      selectedScaleId,
-      customScales,
-      activityLog,
-    };
-    window.localStorage.setItem(storageKey, JSON.stringify(payload));
-  }, [name, roomCode, roomTitle, joined, revealed, selectedVote, votes, isHost, selectedScaleId, customScales, activityLog]);
-
-  useEffect(() => {
-    if (!joined || !roomCode) return;
-    const payload = { participantId: participantIdRef.current };
-    window.localStorage.setItem(`${storageKey}-session`, JSON.stringify(payload));
-  }, [joined, roomCode]);
-
-  useEffect(() => {
     if (!joined || !isHost || !roomCode) return;
     setJoinLink(buildJoinLink(roomCode, roomTitle, selectedScaleId));
   }, [joined, isHost, roomCode, roomTitle, selectedScaleId]);
 
-  const getRoomStorageKey = useCallback((code) => `scrum-poker-room:${(code || '').toUpperCase()}`, []);
-
-  const readStoredRoom = useCallback(async (code) => {
-    try {
-      const normalizedCode = (code || '').toUpperCase();
-      const storedValue = window.localStorage.getItem(getRoomStorageKey(normalizedCode));
-      const localRoom = storedValue ? normalizeRoomState(JSON.parse(storedValue)) : null;
-
-      if (!database) {
-        return localRoom ? resolveRoomState(localRoom, null) : null;
-      }
-
-      const snapshot = await get(ref(database, `rooms/${normalizedCode}`));
-      if (!snapshot.exists()) {
-        return localRoom ? resolveRoomState(localRoom, null) : null;
-      }
-
-      return resolveRoomState(localRoom, snapshot.val());
-    } catch (error) {
-      console.error('Unable to load room state', error);
-      return null;
-    }
-  }, [getRoomStorageKey]);
-
-  const persistRoom = useCallback(async (nextState) => {
-    const normalized = normalizeRoomState({
-      roomCode: nextState?.roomCode || roomCodeRef.current,
-      roomTitle: nextState?.roomTitle || roomTitleRef.current,
-      selectedScaleId: nextState?.selectedScaleId || selectedScaleIdRef.current,
-      revealed: nextState?.revealed,
-      votes: nextState?.votes || [],
-      participants: nextState?.participants || [],
-      activityLog: nextState?.activityLog || [],
+  useEffect(() => {
+    if (!database) return undefined;
+    let mounted = true;
+    ensureAuth().finally(() => {
+      if (mounted) setAuthReady(true);
     });
-
-    const roomCodeValue = (normalized.roomCode || '').toUpperCase();
-    if (!roomCodeValue) return;
-
-    const storagePayload = JSON.stringify(normalized);
-    window.localStorage.setItem(getRoomStorageKey(roomCodeValue), storagePayload);
-
-    if (database) {
-      try {
-        await set(ref(database, `rooms/${roomCodeValue}`), normalized);
-        setConnectionStatus('Room synced');
-        return;
-      } catch (error) {
-        console.warn('Firebase room sync unavailable, using local storage only', error);
-      }
-    }
-
-    setConnectionStatus(database ? 'Cloud sync unavailable — changes saved on this device only' : 'Cloud sync is not configured — changes are saved on this device only');
-  }, [getRoomStorageKey]);
-
-  const applyRemoteRoomState = useCallback((payload) => {
-    const remoteRoom = normalizeRoomState(payload);
-
-    if (!remoteRoom.roomCode || remoteRoom.roomCode.toUpperCase() !== roomCodeRef.current.toUpperCase()) return;
-
-    setRoomTitle(remoteRoom.roomTitle);
-    setSelectedScaleId(remoteRoom.selectedScaleId || defaultScales[0].id);
-    setRevealed(remoteRoom.revealed);
-    setVotes(remoteRoom.votes);
-    setActivityLog(remoteRoom.activityLog);
-    const ownVote = remoteRoom.votes.find((entry) => entry.id === participantIdRef.current)?.vote ?? null;
-    setSelectedVote(ownVote);
-    setConnectionStatus('Live connection');
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setCanRetry(false);
+      setConnectionStatus('Back online — reconnecting…');
+      setListenerEpoch((value) => value + 1);
+    };
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        setListenerEpoch((value) => value + 1);
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!joined || !roomCode || !database || !authReady) return undefined;
+
+    const codeValue = roomCode.toUpperCase();
+    setConnectionStatus('Connecting to room…');
+    return onValue(
+      ref(database, `rooms/${codeValue}`),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          applyRemoteRoomState(snapshot.val());
+        } else {
+          setConnectionStatus('Waiting for the host to create this room');
+        }
+      },
+      (error) => {
+        console.warn('Live updates unavailable', error);
+        setCanRetry(true);
+        setConnectionStatus('Live updates unavailable — check your connection and retry');
+      },
+    );
+  }, [applyRemoteRoomState, authReady, joined, listenerEpoch, roomCode]);
+
+  useEffect(() => {
+    if (!joined || !roomCode || !database || !authReady) return undefined;
+
+    const codeValue = roomCode.toUpperCase();
+    const ownId = participantIdRef.current;
+    const beat = () => {
+      if (!ownId) return;
+      const now = Date.now();
+      update(ref(database, `rooms/${codeValue}`), {
+        [`participants/${ownId}/lastSeen`]: now,
+        updatedAt: now,
+        expiresAt: now + ROOM_TTL_MS,
+      }).catch(() => {});
+    };
+    beat();
+    const timer = window.setInterval(beat, HEARTBEAT_MS);
+    return () => window.clearInterval(timer);
+  }, [authReady, joined, roomCode]);
 
   useEffect(() => {
     if (!joined || !roomCode || !database) return undefined;
 
-    const normalizedCode = roomCode.toUpperCase();
-    setConnectionStatus('Connecting to room…');
-    return onValue(
-      ref(database, `rooms/${normalizedCode}`),
-      (snapshot) => {
-        if (snapshot.exists()) applyRemoteRoomState(snapshot.val());
-        else setConnectionStatus('Waiting for the host to create this room');
-      },
-      () => setConnectionStatus('Live updates unavailable — refresh to get the latest room state'),
-    );
-  }, [applyRemoteRoomState, joined, roomCode]);
-
-  useEffect(() => {
-    if (!joined || !roomCode || !database) return;
-
+    const codeValue = roomCodeRef.current.toUpperCase();
     const cleanup = () => {
       try {
-        window.sessionStorage.setItem('scrum-poker-refresh', '1');
-      } catch (e) {}
-
-      const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
-      const nextActivityLog = [
-        { id: `leave-${Date.now()}`, text: `${nameRef.current || 'A participant'} left the room`, participantId: participantIdRef.current },
-        ...activityLogRef.current,
-      ].slice(0, 8);
-      set(ref(database, `rooms/${roomCodeRef.current}`), {
-        roomCode: roomCodeRef.current,
-        roomTitle: roomTitleRef.current,
-        selectedScaleId: selectedScaleIdRef.current,
-        revealed: false,
-        votes: nextVotes,
-        participants: [],
-        activityLog: nextActivityLog,
-      });
+        window.sessionStorage.setItem(refreshFlagKey, '1');
+      } catch (error) {}
+      const ownId = participantIdRef.current;
+      if (!ownId) return;
+      remove(ref(database, `rooms/${codeValue}/votes/${ownId}`)).catch(() => {});
+      remove(ref(database, `rooms/${codeValue}/participants/${ownId}`)).catch(() => {});
     };
 
-    window.addEventListener('beforeunload', cleanup);
     window.addEventListener('pagehide', cleanup);
-    return () => {
-      window.removeEventListener('beforeunload', cleanup);
-      window.removeEventListener('pagehide', cleanup);
-    };
-  }, [joined, roomCode, database, name]);
+    return () => window.removeEventListener('pagehide', cleanup);
+  }, [joined, roomCode, database]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams(window.location.search);
+    const roomFromUrl = (params.get('room') || '').toUpperCase();
+    const titleFromUrl = params.get('title');
+    const scaleFromUrl = params.get('scale');
+
+    if (roomFromUrl) {
+      setRoomCode(roomFromUrl);
+    }
+    if (titleFromUrl) {
+      setRoomTitle(titleFromUrl);
+    }
+    if (scaleFromUrl) {
+      setSelectedScaleId(scaleFromUrl);
+    }
+
+    const refreshFlag = window.sessionStorage.getItem(refreshFlagKey);
+    if (refreshFlag) {
+      window.sessionStorage.removeItem(refreshFlagKey);
+    }
+
+    let savedName = '';
+    try {
+      savedName = window.localStorage.getItem(nameKey) || '';
+      if (savedName) setName(savedName);
+      const savedParticipantId = window.localStorage.getItem(participantIdKey);
+      if (savedParticipantId) participantIdRef.current = savedParticipantId;
+      const savedScales = window.localStorage.getItem(customScalesKey);
+      if (savedScales) setCustomScales(JSON.parse(savedScales));
+    } catch (error) {
+      console.warn('Unable to restore preferences', error);
+    }
+
+    if (roomFromUrl) {
+      let parsed = null;
+      try {
+        const savedRoom = window.localStorage.getItem(getRoomStorageKey(roomFromUrl));
+        if (savedRoom) parsed = JSON.parse(savedRoom);
+      } catch (error) {
+        console.warn('Unable to restore room state', error);
+      }
+
+      if (parsed) {
+        const roomFields = normalizeRoomState(parsed);
+        setName(parsed.name || savedName);
+        setRoomTitle(roomFields.roomTitle || titleFromUrl || 'Sprint Planning');
+        setSelectedScaleId(roomFields.selectedScaleId || scaleFromUrl || defaultScales[0].id);
+        setRevealed(roomFields.revealed);
+        setHostOnly(roomFields.hostOnly);
+        setSelectedVote(parsed.selectedVote ?? null);
+        setVotes(roomFields.votes);
+        setParticipants(roomFields.participants);
+        setIsHost(Boolean(parsed.isHost));
+
+        if (parsed.joined) {
+          setJoined(true);
+          joinedRef.current = true;
+          if (refreshFlag && database && participantIdRef.current && !cancelled) {
+            restorePresence(roomFromUrl, participantIdRef.current);
+          }
+        }
+      }
+    } else {
+      try {
+        const savedDraft = window.localStorage.getItem(draftKey);
+        if (savedDraft) {
+          const draft = JSON.parse(savedDraft);
+          if (draft.roomTitle) setRoomTitle(draft.roomTitle);
+          if (draft.selectedScaleId) setSelectedScaleId(draft.selectedScaleId);
+          if (draft.roomCode) setRoomCode(draft.roomCode);
+        }
+      } catch (error) {
+        console.warn('Unable to restore draft', error);
+      }
+    }
+  }, [getRoomStorageKey, restorePresence]);
+
+  const findAvailableRoomCode = async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const candidate = generateRoomCode();
+      if (!database) {
+        return candidate;
+      }
+      const snapshot = await get(ref(database, `rooms/${candidate}`));
+      if (!snapshot.exists()) {
+        return candidate;
+      }
+    }
+    return `${generateRoomCode()}${Date.now().toString(36).slice(-2).toUpperCase()}`;
+  };
+
+  const roomExists = async (code) => {
+    if (!database) return false;
+    try {
+      const snapshot = await get(ref(database, `rooms/${(code || '').toUpperCase()}`));
+      return snapshot.exists();
+    } catch (error) {
+      return false;
+    }
+  };
 
   const createRoom = async () => {
     if (!name.trim()) {
@@ -340,34 +509,80 @@ function App() {
       return;
     }
 
-    const nextRoomCode = (roomCode || generateRoomCode()).toUpperCase();
+    await ensureAuth();
+    const nextParticipantId = getOrCreateParticipantId(name);
+    participantIdRef.current = nextParticipantId;
     const nextRoomTitle = roomTitle || 'Sprint Planning';
     const nextScaleId = selectedScaleId || defaultScales[0].id;
-    const nextParticipantId = `${slugify(name)}-${Date.now()}`;
-    const nextActivityLog = [{ id: `create-${Date.now()}`, text: `${name} created the room` }];
-    const nextVotes = upsertVoteEntry([], { id: nextParticipantId, name, vote: null });
 
-    participantIdRef.current = nextParticipantId;
-    setRoomCode(nextRoomCode);
-    setJoined(true);
-    setIsHost(true);
-    setRevealed(false);
-    setSelectedVote(null);
-    setVotes(nextVotes);
-    setActivityLog(nextActivityLog);
-    setJoinError('');
-    setJoinLink(buildJoinLink(nextRoomCode, nextRoomTitle, nextScaleId));
-    setConnectionStatus('Room ready');
+    let nextRoomCode = (roomCode || '').trim().toUpperCase();
+    if (!nextRoomCode) {
+      nextRoomCode = await findAvailableRoomCode();
+    } else if (await roomExists(nextRoomCode)) {
+      setJoinError('That room code is already in use. Leave the code empty to auto-generate one.');
+      return;
+    }
 
-    await persistRoom({
+    const now = Date.now();
+    const initialVote = { id: nextParticipantId, name, vote: null };
+    const initialParticipants = {
+      [nextParticipantId]: { id: nextParticipantId, name, online: true, lastSeen: now },
+    };
+    const baseRoom = {
       roomCode: nextRoomCode,
       roomTitle: nextRoomTitle,
       selectedScaleId: nextScaleId,
       revealed: false,
-      votes: nextVotes,
-      participants: [],
-      activityLog: nextActivityLog,
+      hostOnly,
+      hostId: nextParticipantId,
+      updatedAt: now,
+      expiresAt: now + ROOM_TTL_MS,
+      votes: {
+        [nextParticipantId]: { name, vote: null },
+      },
+      participants: {
+        [nextParticipantId]: { name, online: true, lastSeen: now },
+      },
+    };
+
+    setRoomCode(nextRoomCode);
+    setJoined(true);
+    joinedRef.current = true;
+    setIsHost(true);
+    setRevealed(false);
+    setHostOnly(hostOnly);
+    setSelectedVote(null);
+    setVotes([initialVote]);
+    setParticipants(initialParticipants);
+    setJoinError('');
+    setExpired(false);
+    setJoinLink(buildJoinLink(nextRoomCode, nextRoomTitle, nextScaleId));
+    setConnectionStatus(database ? 'Creating room…' : 'Room ready');
+
+    cacheRoomState(nextRoomCode, {
+      name,
+      roomCode: nextRoomCode,
+      roomTitle: nextRoomTitle,
+      joined: true,
+      revealed: false,
+      hostOnly,
+      selectedVote: null,
+      votes: [initialVote],
+      participants: initialParticipants,
+      isHost: true,
+      selectedScaleId: nextScaleId,
     });
+
+    if (!database) return;
+
+    try {
+      await set(ref(database, `rooms/${nextRoomCode}`), baseRoom);
+      await registerPresence(nextRoomCode, nextParticipantId, name);
+      setConnectionStatus('Room ready');
+    } catch (error) {
+      console.warn('Unable to create the room on Firebase', error);
+      setConnectionStatus('Cloud sync unavailable — changes saved on this device only');
+    }
   };
 
   const joinRoom = async () => {
@@ -375,13 +590,13 @@ function App() {
       setJoinError('Please enter your name before joining a room.');
       return;
     }
-
     const nextRoomCode = (roomCode || '').trim().toUpperCase();
     if (!nextRoomCode) {
       setJoinError('Please enter a room code to join.');
       return;
     }
 
+    await ensureAuth();
     const existingRoom = await readStoredRoom(nextRoomCode);
     if (!existingRoom) {
       setJoinError(
@@ -392,35 +607,45 @@ function App() {
       return;
     }
 
-    const roomToJoin = existingRoom;
-
-    const nextParticipantId = `${slugify(name)}-${Date.now()}`;
+    const nextParticipantId = getOrCreateParticipantId(name);
     participantIdRef.current = nextParticipantId;
 
     const entry = { id: nextParticipantId, name, vote: null };
-    const nextVotes = upsertVoteEntry(roomToJoin.votes || [], entry);
-    const nextActivityLog = [{ id: `join-${Date.now()}`, text: `${name} joined the room` }, ...(roomToJoin.activityLog || [])].slice(0, 8);
+    const nextVotes = upsertVoteEntry(dedupeVotesByName(existingRoom.votes || [], name), entry);
 
     setRoomCode(nextRoomCode);
     setJoined(true);
-    setIsHost(false);
-    setRevealed(Boolean(roomToJoin.revealed));
-    setRoomTitle(roomToJoin.roomTitle || roomTitle || 'Sprint Planning');
-    setSelectedScaleId(roomToJoin.selectedScaleId || selectedScaleId || defaultScales[0].id);
+    joinedRef.current = true;
+    setIsHost(existingRoom.hostId === nextParticipantId);
+    setRevealed(Boolean(existingRoom.revealed));
+    setHostOnly(Boolean(existingRoom.hostOnly));
+    setRoomTitle(existingRoom.roomTitle || roomTitle || 'Sprint Planning');
+    setSelectedScaleId(existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id);
+    setSelectedVote(null);
     setVotes(nextVotes);
-    setActivityLog(nextActivityLog);
+    setParticipants(existingRoom.participants || {});
     setJoinError('');
-    setConnectionStatus(database ? 'Joined room' : 'Joined local room');
+    setExpired(false);
+    setConnectionStatus(database ? 'Joining room…' : 'Joined room');
 
-    await persistRoom({
+    cacheRoomState(nextRoomCode, {
+      name,
       roomCode: nextRoomCode,
-      roomTitle: roomToJoin.roomTitle || roomTitle || 'Sprint Planning',
-      selectedScaleId: roomToJoin.selectedScaleId || selectedScaleId || defaultScales[0].id,
-      revealed: Boolean(roomToJoin.revealed),
+      roomTitle: existingRoom.roomTitle || roomTitle || 'Sprint Planning',
+      joined: true,
+      revealed: Boolean(existingRoom.revealed),
+      hostOnly: Boolean(existingRoom.hostOnly),
+      selectedVote: null,
       votes: nextVotes,
-      participants: roomToJoin.participants || [],
-      activityLog: nextActivityLog,
+      participants: existingRoom.participants || {},
+      isHost: existingRoom.hostId === nextParticipantId,
+      selectedScaleId: existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id,
     });
+
+    if (database) {
+      await registerPresence(nextRoomCode, nextParticipantId, name);
+      setConnectionStatus('Joined room');
+    }
   };
 
   const addCustomScale = () => {
@@ -455,72 +680,155 @@ function App() {
   const submitVote = async (value) => {
     if (!joined) return;
     const normalizedVote = String(value);
-    setSelectedVote(normalizedVote);
+    if (!activeScale.values.includes(normalizedVote)) return;
 
-    const entry = {
-      id: participantIdRef.current || `${name}-${Date.now()}`,
-      name,
-      vote: normalizedVote,
-    };
-
+    const ownId = participantIdRef.current || getOrCreateParticipantId(name);
+    participantIdRef.current = ownId;
+    const entry = { id: ownId, name, vote: normalizedVote };
     const nextVotes = upsertVoteEntry(votesRef.current, entry);
+
+    setSelectedVote(normalizedVote);
     setVotes(nextVotes);
-    await persistRoom({
+    const codeValue = roomCodeRef.current.toUpperCase();
+    cacheRoomState(codeValue, {
+      ...currentRoomSnapshot(),
+      selectedVote: normalizedVote,
       votes: nextVotes,
-      revealed,
-      roomTitle: roomTitleRef.current,
-      selectedScaleId: selectedScaleIdRef.current,
-      activityLog: activityLogRef.current,
     });
+
+    if (!database) return;
+
+    const now = Date.now();
+    try {
+      await update(ref(database, `rooms/${codeValue}`), {
+        [`votes/${ownId}`]: { name, vote: normalizedVote },
+        updatedAt: now,
+        expiresAt: now + ROOM_TTL_MS,
+      });
+      setConnectionStatus('Vote synced');
+    } catch (error) {
+      console.warn('Unable to sync vote', error);
+      setConnectionStatus('Vote saved on this device only — cloud sync unavailable');
+    }
   };
 
   const revealVotes = async () => {
+    if (!joined) return;
+    if (hostOnly && !isHost) return;
+
     const nextValue = !revealed;
     setRevealed(nextValue);
-    await persistRoom({
-      votes: votesRef.current,
-      revealed: nextValue,
-      roomTitle: roomTitleRef.current,
-      selectedScaleId: selectedScaleIdRef.current,
-      activityLog: activityLogRef.current,
-    });
+    const codeValue = roomCodeRef.current.toUpperCase();
+    cacheRoomState(codeValue, { ...currentRoomSnapshot(), revealed: nextValue });
+
+    if (!database) return;
+
+    const now = Date.now();
+    try {
+      await update(ref(database, `rooms/${codeValue}`), {
+        revealed: nextValue,
+        updatedAt: now,
+        expiresAt: now + ROOM_TTL_MS,
+      });
+      setConnectionStatus(nextValue ? 'Votes revealed' : 'Votes hidden');
+    } catch (error) {
+      console.warn('Unable to sync reveal state', error);
+      setConnectionStatus('Cloud sync unavailable — change saved on this device only');
+    }
   };
 
   const resetRound = async () => {
+    if (!joined) return;
+    if (hostOnly && !isHost) return;
+
     setSelectedVote(null);
     setRevealed(false);
     const nextVotes = votesRef.current.map((entry) => ({ ...entry, vote: null }));
     setVotes(nextVotes);
-    await persistRoom({
-      votes: nextVotes,
+    const codeValue = roomCodeRef.current.toUpperCase();
+    cacheRoomState(codeValue, {
+      ...currentRoomSnapshot(),
+      selectedVote: null,
       revealed: false,
-      roomTitle: roomTitleRef.current,
-      selectedScaleId: selectedScaleIdRef.current,
-      activityLog: activityLogRef.current,
+      votes: nextVotes,
     });
+
+    if (!database) return;
+
+    const now = Date.now();
+    try {
+      await remove(ref(database, `rooms/${codeValue}/votes`));
+      await update(ref(database, `rooms/${codeValue}`), {
+        revealed: false,
+        updatedAt: now,
+        expiresAt: now + ROOM_TTL_MS,
+      });
+      setConnectionStatus('Round reset');
+    } catch (error) {
+      console.warn('Unable to reset the round', error);
+      setConnectionStatus('Cloud sync unavailable — change saved on this device only');
+    }
   };
 
   const leaveRoom = async () => {
-    const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
-    const nextActivityLog = [{ id: `leave-${Date.now()}`, text: `${name || 'You'} left the room` }, ...activityLogRef.current].slice(0, 8);
-    setVotes(nextVotes);
-    setActivityLog(nextActivityLog);
-    await persistRoom({
-      votes: nextVotes,
-      revealed: false,
-      roomTitle: roomTitleRef.current,
-      selectedScaleId: selectedScaleIdRef.current,
-      activityLog: nextActivityLog,
-    });
+    const codeValue = roomCodeRef.current.toUpperCase();
+    const ownId = participantIdRef.current;
+
     setJoined(false);
+    joinedRef.current = false;
     setVotes([]);
+    setParticipants({});
     setSelectedVote(null);
     setRevealed(false);
+    setHostOnly(false);
     setRoomCode('');
     setIsHost(false);
     setJoinLink('');
     setConnectionStatus('Ready to connect');
     window.history.replaceState({}, '', window.location.pathname);
+
+    window.localStorage.removeItem(getRoomStorageKey(codeValue));
+    window.localStorage.removeItem(lastRoomKey);
+
+    if (!database || !ownId) return;
+
+    if (participantDisconnectRef.current) {
+      participantDisconnectRef.current.cancel().catch(() => {});
+      participantDisconnectRef.current = null;
+    }
+    if (voteDisconnectRef.current) {
+      voteDisconnectRef.current.cancel().catch(() => {});
+      voteDisconnectRef.current = null;
+    }
+    remove(ref(database, `rooms/${codeValue}/votes/${ownId}`)).catch(() => {});
+    remove(ref(database, `rooms/${codeValue}/participants/${ownId}`)).catch(() => {});
+  };
+
+  const retryConnection = () => {
+    setCanRetry(false);
+    setConnectionStatus('Reconnecting…');
+    if (joined && roomCode && database) {
+      registerPresence(roomCode, participantIdRef.current, nameRef.current);
+    }
+    setListenerEpoch((value) => value + 1);
+  };
+
+  const resetExpired = () => {
+    setExpired(false);
+    setJoined(false);
+    joinedRef.current = false;
+    setVotes([]);
+    setParticipants({});
+    setSelectedVote(null);
+    setRevealed(false);
+    setHostOnly(false);
+    setRoomCode('');
+    setIsHost(false);
+    setJoinLink('');
+    setConnectionStatus('Ready to connect');
+    window.history.replaceState({}, '', window.location.pathname);
+    window.localStorage.removeItem(getRoomStorageKey(roomCodeRef.current));
+    window.localStorage.removeItem(lastRoomKey);
   };
 
   const copyInviteLink = async () => {
@@ -533,6 +841,29 @@ function App() {
     }
   };
 
+  const participantEntries = useMemo(() => {
+    const entries = [];
+    const participantIds = Object.keys(participants);
+    if (participantIds.length === 0) {
+      for (const voteEntry of votes) {
+        entries.push({ id: voteEntry.id, name: voteEntry.name, online: true, vote: voteEntry.vote });
+      }
+      return entries;
+    }
+    for (const [id, participant] of Object.entries(participants)) {
+      const voteEntry = votes.find((entry) => entry.id === id);
+      entries.push({
+        id,
+        name: participant.name || voteEntry?.name || '',
+        online: Boolean(participant.online),
+        vote: voteEntry?.vote ?? null,
+      });
+    }
+    return entries;
+  }, [participants, votes]);
+
+  const hasRoomParam = new URLSearchParams(window.location.search).has('room');
+
   return (
     <div className="app-shell">
       <header className="hero-card">
@@ -543,12 +874,20 @@ function App() {
         <div className="pill">{joined ? `Room ${roomCode}` : 'Not joined'}</div>
       </header>
 
-      {!joined ? (
+      {expired ? (
+        <section className="card">
+          <h2>This room has expired</h2>
+          <p className="muted">Rooms expire after a period of inactivity. Create a new room to keep planning.</p>
+          <div className="button-row">
+            <button onClick={resetExpired}>Create a new room</button>
+          </div>
+        </section>
+      ) : !joined ? (
         <section className="card form-card">
           <h2>Create or join a room</h2>
           <label>
             Your name
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex" />
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex" autoComplete="name" />
           </label>
           <label>
             Room title
@@ -556,7 +895,7 @@ function App() {
           </label>
           <label>
             Room code
-            <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" />
+            <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" autoComplete="off" />
           </label>
           <label>
             Estimation scale
@@ -581,11 +920,17 @@ function App() {
             />
             <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
           </div>
+          {!hasRoomParam ? (
+            <label className="check-row">
+              <input type="checkbox" checked={hostOnly} onChange={(event) => setHostOnly(event.target.checked)} />
+              Restrict Reveal / Reset to the host
+            </label>
+          ) : null}
           <div className="button-row">
-            {!new URLSearchParams(window.location.search).has('room') ? <button onClick={createRoom}>Create room</button> : null}
+            {!hasRoomParam ? <button onClick={createRoom}>Create room</button> : null}
             <button className="secondary" onClick={joinRoom}>Join room</button>
           </div>
-          {joinError ? <p className="muted status-line">{joinError}</p> : null}
+          {joinError ? <p className="muted status-line" role="alert">{joinError}</p> : null}
           <p className="muted status-line">Share the room link from the host and enter your name before you join.</p>
         </section>
       ) : (
@@ -597,13 +942,23 @@ function App() {
                 <h2>{roomTitle}</h2>
               </div>
               <div className="button-row compact">
-                <button onClick={revealVotes}>{revealed ? 'Hide votes' : 'Reveal votes'}</button>
-                <button className="secondary" onClick={resetRound}>Reset round</button>
+                {(!hostOnly || isHost) ? (
+                  <>
+                    <button aria-pressed={revealed} onClick={revealVotes}>{revealed ? 'Hide votes' : 'Reveal votes'}</button>
+                    <button className="secondary" onClick={resetRound}>Reset round</button>
+                  </>
+                ) : null}
                 <button className="ghost" onClick={leaveRoom}>Leave</button>
               </div>
             </div>
-            <p className="muted">Welcome, {name}. {isHost ? 'You are hosting this room.' : 'You are joining as a participant.'}</p>
-            <p className="status-line">Connection: {connectionStatus}</p>
+            <p className="muted">
+              Welcome, {name}. {isHost ? 'You are hosting this room.' : 'You are joining as a participant.'}
+              {hostOnly && !isHost ? ' Only the host can reveal or reset the round.' : ''}
+            </p>
+            <div className="status-row">
+              <p className="status-line" role="status" aria-live="polite">Connection: {connectionStatus}</p>
+              {canRetry ? <button className="ghost" onClick={retryConnection}>Retry connection</button> : null}
+            </div>
             {isHost && joinLink ? (
               <div className="share-box">
                 <span>{joinLink}</span>
@@ -620,6 +975,8 @@ function App() {
                   <button
                     key={value}
                     className={`vote-card ${selectedVote === value ? 'selected' : ''}`}
+                    aria-pressed={selectedVote === value}
+                    aria-label={`Vote ${value}`}
                     onClick={() => submitVote(value)}
                   >
                     {value}
@@ -630,16 +987,35 @@ function App() {
 
             <section className="card participants-column">
               <h3>Participants</h3>
-              <ul className="participant-list">
-                {votes.length === 0 ? (
-                  <li className="muted">No one has voted yet.</li>
+              <ul className="participant-list" aria-live="polite" aria-relevant="additions removals">
+                {participantEntries.length === 0 ? (
+                  <li className="muted">No participants yet.</li>
                 ) : (
-                  votes.map((entry) => (
-                    <li key={`${entry.id}-${entry.name}`}>
-                      <span>{entry.name}</span>
-                      <strong>{revealed ? entry.vote ?? '—' : entry.vote ? '✓' : 'Pending'}</strong>
-                    </li>
-                  ))
+                  participantEntries.map((entry) => {
+                    const hasVoted = Boolean(entry.vote);
+                    const validVote = entry.vote && activeScale.values.includes(String(entry.vote)) ? String(entry.vote) : null;
+                    const statusLabel = revealed
+                      ? validVote
+                        ? `voted ${validVote}`
+                        : 'did not vote'
+                      : hasVoted
+                        ? 'has voted'
+                        : 'has not voted';
+                    const voteText = revealed
+                      ? validVote || '—'
+                      : hasVoted
+                        ? '✓'
+                        : 'Pending';
+                    return (
+                      <li key={entry.id}>
+                        <span>
+                          {entry.name}
+                          <span className="sr-only">{statusLabel}</span>
+                        </span>
+                        <strong aria-hidden="true">{voteText}</strong>
+                      </li>
+                    );
+                  })
                 )}
               </ul>
             </section>
