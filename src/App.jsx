@@ -26,6 +26,8 @@ const defaultScales = [
   { id: 'days', name: 'Days', values: ['1', '2', '3', '5', '8', '13', '?'] },
 ];
 
+const CUSTOM_SCALE_ID = '__custom__';
+
 function generateRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
@@ -513,7 +515,9 @@ function App() {
     const nextParticipantId = getOrCreateParticipantId(name);
     participantIdRef.current = nextParticipantId;
     const nextRoomTitle = roomTitle || 'Sprint Planning';
-    const nextScaleId = selectedScaleId || defaultScales[0].id;
+    const nextScaleId = selectedScaleId === CUSTOM_SCALE_ID || !selectedScaleId
+      ? defaultScales[0].id
+      : selectedScaleId;
 
     let nextRoomCode = (roomCode || '').trim().toUpperCase();
     if (!nextRoomCode) {
@@ -620,7 +624,7 @@ function App() {
     setRevealed(Boolean(existingRoom.revealed));
     setHostOnly(Boolean(existingRoom.hostOnly));
     setRoomTitle(existingRoom.roomTitle || roomTitle || 'Sprint Planning');
-    setSelectedScaleId(existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id);
+    setSelectedScaleId(existingRoom.selectedScaleId || (selectedScaleId === CUSTOM_SCALE_ID ? defaultScales[0].id : selectedScaleId) || defaultScales[0].id);
     setSelectedVote(null);
     setVotes(nextVotes);
     setParticipants(existingRoom.participants || {});
@@ -639,7 +643,7 @@ function App() {
       votes: nextVotes,
       participants: existingRoom.participants || {},
       isHost: existingRoom.hostId === nextParticipantId,
-      selectedScaleId: existingRoom.selectedScaleId || selectedScaleId || defaultScales[0].id,
+      selectedScaleId: existingRoom.selectedScaleId || (selectedScaleId === CUSTOM_SCALE_ID ? defaultScales[0].id : selectedScaleId) || defaultScales[0].id,
     });
 
     if (database) {
@@ -905,21 +909,24 @@ function App() {
                   {scale.name}
                 </option>
               ))}
+              <option value={CUSTOM_SCALE_ID}>Custom scale</option>
             </select>
           </label>
-          <div className="scale-builder">
-            <input
-              value={customScaleName}
-              onChange={(event) => setCustomScaleName(event.target.value)}
-              placeholder="New scale name"
-            />
-            <input
-              value={customScaleValuesInput}
-              onChange={(event) => setCustomScaleValuesInput(event.target.value)}
-              placeholder="Values, separated, by commas"
-            />
-            <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
-          </div>
+          {selectedScaleId === CUSTOM_SCALE_ID ? (
+            <div className="scale-builder">
+              <input
+                value={customScaleName}
+                onChange={(event) => setCustomScaleName(event.target.value)}
+                placeholder="New scale name"
+              />
+              <input
+                value={customScaleValuesInput}
+                onChange={(event) => setCustomScaleValuesInput(event.target.value)}
+                placeholder="Values, separated, by commas"
+              />
+              <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
+            </div>
+          ) : null}
           {!hasRoomParam ? (
             <label className="check-row">
               <input type="checkbox" checked={hostOnly} onChange={(event) => setHostOnly(event.target.checked)} />
