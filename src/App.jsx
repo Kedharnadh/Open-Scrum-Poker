@@ -643,22 +643,6 @@ function App() {
                 )}
               </ul>
             </section>
-
-            <section className="card">
-              <h3>Activity</h3>
-              <ul className="participant-list">
-                {activityLog.length === 0 ? (
-                  <li className="muted">No activity yet.</li>
-                ) : (
-                  activityLog.map((entry) => (
-                    <li key={entry.id}>
-                      <span>{entry.text}</span>
-                      <strong>Live</strong>
-                    </li>
-                  ))
-                )}
-              </ul>
-            </section>
           </div>
         </>
       )}
