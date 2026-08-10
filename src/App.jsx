@@ -150,8 +150,10 @@ function App() {
           get(ref(database, `rooms/${normalizedCode}`)).then((snapshot) => {
             if (snapshot.exists()) {
               const room = normalizeRoomState(snapshot.val());
-              const entry = { id: participantIdRef.current, name: parsed.name || '', vote: null };
+              const ownVote = (parsed.votes || []).find((item) => item.id === participantIdRef.current)?.vote ?? null;
+              const entry = { id: participantIdRef.current, name: parsed.name || '', vote: ownVote };
               const nextVotes = upsertVoteEntry(room.votes || [], entry);
+              const nextActivityLog = (room.activityLog || []).filter((logEntry) => logEntry?.participantId !== participantIdRef.current);
               set(ref(database, `rooms/${normalizedCode}`), {
                 roomCode: room.roomCode,
                 roomTitle: room.roomTitle,
@@ -159,7 +161,7 @@ function App() {
                 revealed: room.revealed || false,
                 votes: nextVotes,
                 participants: [],
-                activityLog: room.activityLog || [],
+                activityLog: nextActivityLog,
               });
             }
           });
@@ -310,7 +312,7 @@ function App() {
 
       const nextVotes = removeParticipantVote(votesRef.current, participantIdRef.current);
       const nextActivityLog = [
-        { id: `leave-${Date.now()}`, text: `${nameRef.current || 'A participant'} left the room` },
+        { id: `leave-${Date.now()}`, text: `${nameRef.current || 'A participant'} left the room`, participantId: participantIdRef.current },
         ...activityLogRef.current,
       ].slice(0, 8);
       set(ref(database, `rooms/${roomCodeRef.current}`), {
