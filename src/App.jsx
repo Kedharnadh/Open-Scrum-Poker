@@ -15,7 +15,7 @@ const lastRoomKey = 'scrum-poker-demo-last-room';
 const participantIdKey = 'scrum-poker-demo-participant-id';
 const customScalesKey = 'scrum-poker-demo-custom-scales';
 const refreshFlagKey = 'scrum-poker-refresh';
-const ROOM_TTL_MS = 48 * 60 * 60 * 1000;
+const ROOM_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const STALE_PRESENCE_MS = 90 * 1000;
 const HEARTBEAT_MS = 30 * 1000;
 
