@@ -760,13 +760,16 @@ function App() {
     if (!database) return;
 
     const now = Date.now();
+    const updates = {
+      revealed: false,
+      updatedAt: now,
+      expiresAt: now + ROOM_TTL_MS,
+    };
+    for (const entry of votesRef.current) {
+      updates[`votes/${entry.id}`] = { name: entry.name, vote: null };
+    }
     try {
-      await remove(ref(database, `rooms/${codeValue}/votes`));
-      await update(ref(database, `rooms/${codeValue}`), {
-        revealed: false,
-        updatedAt: now,
-        expiresAt: now + ROOM_TTL_MS,
-      });
+      await update(ref(database, `rooms/${codeValue}`), updates);
       setConnectionStatus('Round reset');
     } catch (error) {
       console.warn('Unable to reset the round', error);
