@@ -904,31 +904,35 @@ function App() {
             Room code
             <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" autoComplete="off" />
           </label>
-          <label>
-            Estimation scale
-            <select value={selectedScaleId} onChange={(event) => setSelectedScaleId(event.target.value)}>
-              {scaleOptions.map((scale) => (
-                <option key={scale.id} value={scale.id}>
-                  {scale.name}
-                </option>
-              ))}
-              <option value={CUSTOM_SCALE_ID}>Custom scale</option>
-            </select>
-          </label>
-          {selectedScaleId === CUSTOM_SCALE_ID ? (
-            <div className="scale-builder">
-              <input
-                value={customScaleName}
-                onChange={(event) => setCustomScaleName(event.target.value)}
-                placeholder="New scale name"
-              />
-              <input
-                value={customScaleValuesInput}
-                onChange={(event) => setCustomScaleValuesInput(event.target.value)}
-                placeholder="Values, separated, by commas"
-              />
-              <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
-            </div>
+          {!hasRoomParam ? (
+            <>
+              <label>
+                Estimation scale
+                <select value={selectedScaleId} onChange={(event) => setSelectedScaleId(event.target.value)}>
+                  {scaleOptions.map((scale) => (
+                    <option key={scale.id} value={scale.id}>
+                      {scale.name}
+                    </option>
+                  ))}
+                  <option value={CUSTOM_SCALE_ID}>Custom scale</option>
+                </select>
+              </label>
+              {selectedScaleId === CUSTOM_SCALE_ID ? (
+                <div className="scale-builder">
+                  <input
+                    value={customScaleName}
+                    onChange={(event) => setCustomScaleName(event.target.value)}
+                    placeholder="New scale name"
+                  />
+                  <input
+                    value={customScaleValuesInput}
+                    onChange={(event) => setCustomScaleValuesInput(event.target.value)}
+                    placeholder="Values, separated, by commas"
+                  />
+                  <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
+                </div>
+              ) : null}
+            </>
           ) : null}
           {!hasRoomParam ? (
             <label className="check-row">
