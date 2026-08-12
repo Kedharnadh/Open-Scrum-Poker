@@ -14,6 +14,7 @@ const draftKey = 'scrum-poker-demo-draft';
 const lastRoomKey = 'scrum-poker-demo-last-room';
 const participantIdKey = 'scrum-poker-demo-participant-id';
 const customScalesKey = 'scrum-poker-demo-custom-scales';
+const scalePrefKey = 'scrum-poker-scale-preference';
 const refreshFlagKey = 'scrum-poker-refresh';
 const ROOM_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const STALE_PRESENCE_MS = 90 * 1000;
@@ -76,7 +77,13 @@ function App() {
   const [connectionStatus, setConnectionStatus] = useState('Ready to connect');
   const [canRetry, setCanRetry] = useState(false);
   const [joinLink, setJoinLink] = useState('');
-  const [selectedScaleId, setSelectedScaleId] = useState(defaultScales[0].id);
+  const [selectedScaleId, setSelectedScaleId] = useState(() => {
+    try {
+      return window.localStorage.getItem(scalePrefKey) || defaultScales[0].id;
+    } catch (error) {
+      return defaultScales[0].id;
+    }
+  });
   const [customScales, setCustomScales] = useState([]);
   const [customScaleName, setCustomScaleName] = useState('');
   const [customScaleValuesInput, setCustomScaleValuesInput] = useState('');
@@ -99,6 +106,15 @@ function App() {
   const participantIdRef = useRef('');
   const participantDisconnectRef = useRef(null);
   const voteDisconnectRef = useRef(null);
+  const hasMountedRef = useRef(false);
+
+  const persistScalePreference = (nextScaleId) => {
+    try {
+      window.localStorage.setItem(scalePrefKey, nextScaleId);
+    } catch (error) {}
+  };
+
+  const hasRoomParam = new URLSearchParams(window.location.search).has('room');
 
   useEffect(() => {
     roomCodeRef.current = roomCode;
@@ -287,11 +303,15 @@ function App() {
   }, [customScales]);
 
   useEffect(() => {
-    if (joined) return;
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+    if (joined || hasRoomParam) return;
     try {
-      window.localStorage.setItem(draftKey, JSON.stringify({ roomTitle, selectedScaleId, roomCode }));
+      window.localStorage.setItem(draftKey, JSON.stringify({ roomTitle, roomCode }));
     } catch (error) {}
-  }, [joined, roomCode, roomTitle, selectedScaleId]);
+  }, [joined, roomCode, roomTitle, hasRoomParam]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -472,7 +492,6 @@ function App() {
         if (savedDraft) {
           const draft = JSON.parse(savedDraft);
           if (draft.roomTitle) setRoomTitle(draft.roomTitle);
-          if (draft.selectedScaleId) setSelectedScaleId(draft.selectedScaleId);
           if (draft.roomCode) setRoomCode(draft.roomCode);
         }
       } catch (error) {
@@ -518,6 +537,7 @@ function App() {
     const nextScaleId = selectedScaleId === CUSTOM_SCALE_ID || !selectedScaleId
       ? defaultScales[0].id
       : selectedScaleId;
+    persistScalePreference(nextScaleId);
 
     let nextRoomCode = (roomCode || '').trim().toUpperCase();
     if (!nextRoomCode) {
@@ -616,6 +636,10 @@ function App() {
 
     const entry = { id: nextParticipantId, name, vote: null };
     const nextVotes = upsertVoteEntry(dedupeVotesByName(existingRoom.votes || [], name), entry);
+    const roomScaleId = existingRoom.selectedScaleId
+      || (selectedScaleId === CUSTOM_SCALE_ID ? defaultScales[0].id : selectedScaleId)
+      || defaultScales[0].id;
+    persistScalePreference(roomScaleId);
 
     setRoomCode(nextRoomCode);
     setJoined(true);
@@ -624,7 +648,7 @@ function App() {
     setRevealed(Boolean(existingRoom.revealed));
     setHostOnly(Boolean(existingRoom.hostOnly));
     setRoomTitle(existingRoom.roomTitle || roomTitle || 'Sprint Planning');
-    setSelectedScaleId(existingRoom.selectedScaleId || (selectedScaleId === CUSTOM_SCALE_ID ? defaultScales[0].id : selectedScaleId) || defaultScales[0].id);
+    setSelectedScaleId(roomScaleId);
     setSelectedVote(null);
     setVotes(nextVotes);
     setParticipants(existingRoom.participants || {});
@@ -643,7 +667,7 @@ function App() {
       votes: nextVotes,
       participants: existingRoom.participants || {},
       isHost: existingRoom.hostId === nextParticipantId,
-      selectedScaleId: existingRoom.selectedScaleId || (selectedScaleId === CUSTOM_SCALE_ID ? defaultScales[0].id : selectedScaleId) || defaultScales[0].id,
+      selectedScaleId: roomScaleId,
     });
 
     if (database) {
@@ -671,6 +695,7 @@ function App() {
       return [...nextCustomScales, nextScale];
     });
     setSelectedScaleId(nextScale.id);
+    persistScalePreference(nextScale.id);
     setCustomScaleName('');
     setCustomScaleValuesInput('');
   };
@@ -869,8 +894,6 @@ function App() {
     return entries;
   }, [participants, votes]);
 
-  const hasRoomParam = new URLSearchParams(window.location.search).has('room');
-
   return (
     <div className="app-shell">
       <header className="hero-card">
@@ -896,10 +919,12 @@ function App() {
             Your name
             <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex" autoComplete="name" />
           </label>
-          <label>
-            Room title
-            <input value={roomTitle} onChange={(event) => setRoomTitle(event.target.value)} placeholder="Sprint Planning" />
-          </label>
+          {!hasRoomParam ? (
+            <label>
+              Room title
+              <input value={roomTitle} onChange={(event) => setRoomTitle(event.target.value)} placeholder="Sprint Planning" />
+            </label>
+          ) : null}
           <label>
             Room code
             <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" autoComplete="off" />
@@ -908,7 +933,7 @@ function App() {
             <>
               <label>
                 Estimation scale
-                <select value={selectedScaleId} onChange={(event) => setSelectedScaleId(event.target.value)}>
+                <select value={selectedScaleId} onChange={(event) => { setSelectedScaleId(event.target.value); persistScalePreference(event.target.value); }}>
                   {scaleOptions.map((scale) => (
                     <option key={scale.id} value={scale.id}>
                       {scale.name}
