@@ -1,18 +1,61 @@
 :root {
   color-scheme: dark;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #0f172a;
+  background-color: #070b16;
   color: #f8fafc;
+  --glass-bg: rgba(255, 255, 255, 0.07);
+  --glass-bg-strong: rgba(255, 255, 255, 0.11);
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-border-strong: rgba(255, 255, 255, 0.26);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --glass-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
+  --accent: #6366f1;
+  --accent-soft: #818cf8;
+  --cyan: #38bdf8;
+  --ring: #fbbf24;
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: linear-gradient(135deg, #0f172a, #1e293b); }
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 700px at 12% -10%, rgba(99, 102, 241, 0.42), transparent 60%),
+    radial-gradient(900px 600px at 92% 6%, rgba(56, 189, 248, 0.24), transparent 62%),
+    radial-gradient(850px 800px at 80% 98%, rgba(139, 92, 246, 0.28), transparent 60%),
+    linear-gradient(160deg, #070b16 0%, #0f172a 52%, #0b1224 100%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle glass grid texture behind the content. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: radial-gradient(circle at 50% 18%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(circle at 50% 18%, #000 0%, transparent 72%);
+}
+
 button, input, select { font: inherit; }
 
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 3px solid #fbbf24;
+  outline: 3px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -39,7 +82,7 @@ select:focus-visible {
 .check-row input {
   width: 18px;
   height: 18px;
-  accent-color: #4f46e5;
+  accent-color: var(--accent);
 }
 
 .status-row {
@@ -49,7 +92,11 @@ select:focus-visible {
   flex-wrap: wrap;
 }
 
-#root { min-height: 100vh; }
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
 
 .app-shell {
   max-width: 960px;
@@ -60,11 +107,14 @@ select:focus-visible {
 }
 
 .hero-card, .card {
-  background: rgba(15, 23, 42, 0.88);
-  border: 1px solid rgba(255,255,255,0.12);
-  box-shadow: 0 20px 40px rgba(2, 6, 23, 0.24);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035) 55%, rgba(99, 102, 241, 0.08));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
   border-radius: 24px;
-  padding: 14px 20px;
+  padding: 18px 20px;
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
 }
 
 .hero-card {
@@ -83,22 +133,50 @@ select:focus-visible {
 }
 
 h1, h2, h3, p { margin: 0; }
-h1 { font-size: 1.35rem; }
+h1 { font-size: 1.35rem; letter-spacing: -0.01em; }
 
 .pill {
-  background: #4f46e5;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.9), rgba(139, 92, 246, 0.72));
+  border: 1px solid var(--glass-border-strong);
   padding: 10px 14px;
   border-radius: 999px;
   font-weight: 700;
+  box-shadow: 0 10px 26px rgba(79, 70, 229, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
 }
 
 .form-card label { display: grid; gap: 8px; margin-top: 12px; }
-input {
+
+input, select {
   padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid #334155;
-  background: #111827;
+  border-radius: 14px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   color: white;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input::placeholder {
+  color: rgba(226, 232, 240, 0.5);
+}
+
+input:hover, select:hover {
+  background: var(--glass-bg-strong);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+input:focus, select:focus {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(129, 140, 248, 0.6);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.16);
+}
+
+select option {
+  background: #111827;
+  color: #f8fafc;
 }
 
 .button-row {
@@ -109,18 +187,59 @@ input {
 }
 
 button {
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 999px;
   padding: 10px 16px;
   cursor: pointer;
-  background: #38bdf8;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.96), rgba(56, 189, 248, 0.86));
   color: #07111f;
   font-weight: 700;
+  box-shadow: 0 10px 26px rgba(56, 189, 248, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease, background 0.18s ease;
 }
 
-button.secondary { background: #64748b; color: white; }
-button.ghost { background: transparent; color: #e2e8f0; border: 1px solid rgba(255,255,255,0.2); }
-button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
+button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 16px 34px rgba(56, 189, 248, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+button.secondary {
+  background: rgba(148, 163, 184, 0.16);
+  color: #e2e8f0;
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+button.secondary:hover {
+  background: rgba(148, 163, 184, 0.24);
+  box-shadow: 0 12px 26px rgba(2, 6, 23, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+button.ghost {
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+button.ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 12px 26px rgba(2, 6, 23, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+
+button.selected {
+  outline: 3px solid var(--ring);
+  transform: translateY(-2px);
+}
 
 .card-grid {
   display: grid;
@@ -132,8 +251,22 @@ button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
 .vote-card {
   min-height: 72px;
   font-size: 1.2rem;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.55), rgba(139, 92, 246, 0.32));
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: white;
+  box-shadow: 0 10px 26px rgba(79, 70, 229, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+}
+
+.vote-card:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.72), rgba(56, 189, 248, 0.42));
+  transform: translateY(-2px);
+}
+
+.vote-card.selected {
+  background: linear-gradient(135deg, rgba(129, 140, 248, 0.9), rgba(56, 189, 248, 0.6));
+  box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.16), 0 16px 34px rgba(56, 189, 248, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .section-head {
@@ -155,9 +288,12 @@ button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
 .participant-list li {
   display: flex;
   justify-content: space-between;
-  background: rgba(255,255,255,0.06);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: 14px;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 .muted { color: #cbd5e1; }
@@ -169,8 +305,11 @@ button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
   align-items: center;
   flex-wrap: wrap;
   padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.06);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 .share-box span {
   flex: 1;
@@ -181,13 +320,6 @@ button.selected { outline: 3px solid #fbbf24; transform: translateY(-1px); }
   display: grid;
   gap: 10px;
   margin-top: 12px;
-}
-select {
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid #334155;
-  background: #111827;
-  color: white;
 }
 
 .room-body {
@@ -200,6 +332,25 @@ select {
 .room-body .participants-column {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+/* Fallback for browsers without backdrop-filter support. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .hero-card, .card {
+    background: rgba(15, 23, 42, 0.94);
+  }
+  input, select, .vote-card, .pill {
+    background-color: rgba(17, 24, 39, 0.92);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button, input, select, .vote-card {
+    transition: none;
+  }
+  button:hover, .vote-card:hover, button.selected {
+    transform: none;
+  }
 }
 
 @media (max-width: 860px) {
