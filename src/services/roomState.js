@@ -26,6 +26,7 @@ function normalizeParticipant(item, id) {
     name: item?.name || '',
     online: item?.online !== false,
     lastSeen: item?.lastSeen || 0,
+    role: item?.role === 'viewer' ? 'viewer' : 'participant',
   };
 }
 

@@ -16,13 +16,15 @@ test('prefers remote room state when available', () => {
     selectedScaleId: 'fibonacci',
     revealed: true,
     votes: [{ id: 'participant-1', name: 'Alex', vote: '5' }],
-    participants: { 'participant-1': { name: 'Alex', online: true, lastSeen: 123 } },
+    participants: { 'participant-1': { name: 'Alex', online: true, lastSeen: 123, role: 'viewer' } },
   });
 
   assert.equal(result?.roomCode, 'ABC123');
   assert.equal(result?.roomTitle, 'Remote room');
   assert.equal(result?.revealed, true);
-  assert.deepEqual(result?.participants, { 'participant-1': { id: 'participant-1', name: 'Alex', online: true, lastSeen: 123 } });
+  assert.deepEqual(result?.participants, {
+    'participant-1': { id: 'participant-1', name: 'Alex', online: true, lastSeen: 123, role: 'viewer' },
+  });
 });
 
 test('falls back to local room state when no remote state exists', () => {
@@ -96,8 +98,23 @@ test('normalizes participants stored as an array into a map', () => {
   });
 
   assert.deepEqual(result.participants, {
-    p1: { id: 'p1', name: 'Alex', online: true, lastSeen: 123 },
-    p2: { id: 'p2', name: 'Sam', online: false, lastSeen: 456 },
+    p1: { id: 'p1', name: 'Alex', online: true, lastSeen: 123, role: 'participant' },
+    p2: { id: 'p2', name: 'Sam', online: false, lastSeen: 456, role: 'participant' },
+  });
+});
+
+test('normalizes viewer participants and keeps their role', () => {
+  const result = normalizeRoomState({
+    roomCode: 'AB12',
+    participants: [
+      { id: 'p1', name: 'Alex', online: true, lastSeen: 123, role: 'viewer' },
+      { id: 'p2', name: 'Sam', online: true, lastSeen: 456, role: 'participant' },
+    ],
+  });
+
+  assert.deepEqual(result.participants, {
+    p1: { id: 'p1', name: 'Alex', online: true, lastSeen: 123, role: 'viewer' },
+    p2: { id: 'p2', name: 'Sam', online: true, lastSeen: 456, role: 'participant' },
   });
 });
 

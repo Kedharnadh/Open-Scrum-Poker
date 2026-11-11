@@ -1,15 +1,24 @@
 {
   "name": "Scrum Poker",
   "short_name": "Scrum Poker",
+  "description": "A lightweight planning poker app with live sync, no sign-in, and offline support.",
   "start_url": "/Open-Scrum-Poker/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
+  "categories": ["productivity", "utilities"],
   "icons": [
     {
       "src": "/Open-Scrum-Poker/icon.svg",
       "sizes": "any",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/Open-Scrum-Poker/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }

@@ -1,5 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Scrum poker icon">
-  <rect width="128" height="128" rx="28" fill="#4f46e5" />
-  <path d="M36 34h56a8 8 0 0 1 8 8v44a8 8 0 0 1-8 8H36a8 8 0 0 1-8-8V42a8 8 0 0 1 8-8Z" fill="#ffffff" fill-opacity="0.96" />
-  <path d="M44 48h40M44 64h24M44 80h16" stroke="#4f46e5" stroke-width="8" stroke-linecap="round" />
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1" />
+      <stop offset="1" stop-color="#0ea5e9" />
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.1" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#bg)" />
+  <circle cx="98" cy="26" r="44" fill="#ffffff" fill-opacity="0.14" />
+  <rect x="24" y="30" width="80" height="68" rx="17" fill="url(#glass)" stroke="#ffffff" stroke-opacity="0.5" />
+  <path d="M42 51h44M42 65h28M42 79h18" stroke="#ffffff" stroke-width="8" stroke-linecap="round" />
 </svg>

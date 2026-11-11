@@ -19,6 +19,8 @@ const refreshFlagKey = 'scrum-poker-refresh';
 const ROOM_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const STALE_PRESENCE_MS = 90 * 1000;
 const HEARTBEAT_MS = 30 * 1000;
+// Hidden for now while the round-summary design is revisited.
+const SHOW_ROUND_SUMMARY = false;
 
 const defaultScales = [
   { id: 'linear-1-8', name: 'Linear 1-8', values: ['1', '2', '3', '4', '5', '6', '7', '8', '?'] },
@@ -28,6 +30,74 @@ const defaultScales = [
 ];
 
 const CUSTOM_SCALE_ID = '__custom__';
+const themeKey = 'scrum-poker-theme';
+
+function getInitials(value) {
+  const parts = (value || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  return parts.slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+}
+
+function getAvatarStyle(value) {
+  const source = (value || '?').trim() || '?';
+  let hash = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    hash = (hash * 31 + source.charCodeAt(index)) % 360;
+  }
+  return {
+    background: `linear-gradient(135deg, hsl(${hash} 72% 56%), hsl(${(hash + 48) % 360} 72% 42%))`,
+  };
+}
+
+function formatMetric(value) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function LogoMark() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="4.5" y="3.5" width="11" height="15" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="9" y="6" width="11" height="15" rx="2.5" fill="currentColor" fillOpacity="0.18" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 10.5h5M12 13.5h5M12 16.5h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="8" y="8" width="11" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M15 8V6.5A2.5 2.5 0 0 0 12.5 4H6.5A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ViewerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  );
+}
 
 function generateRoomCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -91,6 +161,18 @@ function App() {
   const [listenerEpoch, setListenerEpoch] = useState(0);
   const [expired, setExpired] = useState(false);
   const [authReady, setAuthReady] = useState(!database);
+  const [hostId, setHostId] = useState('');
+  const [joinRole, setJoinRole] = useState('participant');
+  const [myRole, setMyRole] = useState('participant');
+  const [theme, setTheme] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(themeKey);
+      if (stored === 'light' || stored === 'dark') return stored;
+      return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    } catch (error) {
+      return 'dark';
+    }
+  });
 
   const roomCodeRef = useRef(roomCode);
   const roomTitleRef = useRef(roomTitle);
@@ -100,6 +182,8 @@ function App() {
   const votesRef = useRef(votes);
   const participantsRef = useRef(participants);
   const isHostRef = useRef(isHost);
+  const hostIdRef = useRef(hostId);
+  const roleRef = useRef(myRole);
   const selectedVoteRef = useRef(selectedVote);
   const joinedRef = useRef(joined);
   const nameRef = useRef(name);
@@ -125,10 +209,23 @@ function App() {
     votesRef.current = votes;
     participantsRef.current = participants;
     isHostRef.current = isHost;
+    hostIdRef.current = hostId;
+    roleRef.current = myRole;
     selectedVoteRef.current = selectedVote;
     joinedRef.current = joined;
     nameRef.current = name;
   });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(themeKey, theme);
+    } catch (error) {}
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      meta.setAttribute('content', theme === 'light' ? '#eef2ff' : '#0f172a');
+    }
+  }, [theme]);
 
   const getRoomStorageKey = useCallback((code) => `scrum-poker-demo-room:${(code || '').toUpperCase()}`, []);
 
@@ -146,6 +243,8 @@ function App() {
       votes: votesRef.current,
       participants: participantsRef.current,
       isHost: isHostRef.current,
+      hostId: hostIdRef.current,
+      role: roleRef.current,
       selectedScaleId: selectedScaleIdRef.current,
     };
     try {
@@ -165,17 +264,20 @@ function App() {
     votes: votesRef.current,
     participants: participantsRef.current,
     isHost: isHostRef.current,
+    hostId: hostIdRef.current,
+    role: roleRef.current,
     selectedScaleId: selectedScaleIdRef.current,
   }), []);
 
-  const registerPresence = useCallback(async (code, id, participantName) => {
+  const registerPresence = useCallback(async (code, id, participantName, role = roleRef.current) => {
     if (!database || !code || !id) return;
     const codeValue = code.toUpperCase();
     const now = Date.now();
+    const isViewer = role === 'viewer';
     const cachedVote = votesRef.current.find((entry) => entry.id === id)?.vote ?? null;
     const updates = {
-      [`participants/${id}`]: { name: participantName, online: true, lastSeen: now },
-      [`votes/${id}`]: { name: participantName, vote: cachedVote },
+      [`participants/${id}`]: { name: participantName, online: true, lastSeen: now, role },
+      [`votes/${id}`]: isViewer ? null : { name: participantName, vote: cachedVote },
       updatedAt: now,
       expiresAt: now + ROOM_TTL_MS,
     };
@@ -192,11 +294,13 @@ function App() {
     try {
       await update(ref(database, `rooms/${codeValue}`), updates);
       const participantDisconnect = onDisconnect(ref(database, `rooms/${codeValue}/participants/${id}`));
-      const voteDisconnect = onDisconnect(ref(database, `rooms/${codeValue}/votes/${id}`));
       participantDisconnect.remove();
-      voteDisconnect.remove();
       participantDisconnectRef.current = participantDisconnect;
-      voteDisconnectRef.current = voteDisconnect;
+      if (!isViewer) {
+        const voteDisconnect = onDisconnect(ref(database, `rooms/${codeValue}/votes/${id}`));
+        voteDisconnect.remove();
+        voteDisconnectRef.current = voteDisconnect;
+      }
     } catch (error) {
       console.warn('Unable to register presence', error);
     }
@@ -213,7 +317,7 @@ function App() {
       const nameToUse = nameRef.current
         || room.votes.find((entry) => entry.id === id)?.name
         || 'Participant';
-      await registerPresence(codeValue, id, nameToUse);
+      await registerPresence(codeValue, id, nameToUse, roleRef.current);
     } catch (error) {
       console.warn('Unable to restore presence', error);
     }
@@ -260,6 +364,7 @@ function App() {
     setSelectedScaleId(remoteRoom.selectedScaleId || defaultScales[0].id);
     setRevealed(remoteRoom.revealed);
     setHostOnly(remoteRoom.hostOnly);
+    setHostId(remoteRoom.hostId || '');
     setVotes(remoteRoom.votes);
     setParticipants(remoteRoom.participants);
     const ownVote = remoteRoom.votes.find((entry) => entry.id === participantIdRef.current)?.vote ?? null;
@@ -282,11 +387,15 @@ function App() {
     }
 
     const ownId = participantIdRef.current;
-    const participantPresent = ownId && Boolean(remoteRoom.participants[ownId]);
+    const ownParticipant = ownId ? remoteRoom.participants[ownId] : null;
+    const participantPresent = Boolean(ownParticipant);
+    const ownRole = ownParticipant?.role || roleRef.current;
     const votePresent = ownId && remoteRoom.votes.some((entry) => entry.id === ownId);
     const cachedOwnVote = votesRef.current.find((entry) => entry.id === ownId)?.vote;
-    if (joinedRef.current && ownId && (!participantPresent || (!votePresent && cachedOwnVote))) {
-      registerPresence(roomCodeRef.current, ownId, nameRef.current);
+    const missingOwnVote = ownRole !== 'viewer' && !votePresent && Boolean(cachedOwnVote);
+    const roleMismatch = participantPresent && ownRole !== roleRef.current;
+    if (joinedRef.current && ownId && (!participantPresent || missingOwnVote || roleMismatch)) {
+      registerPresence(roomCodeRef.current, ownId, nameRef.current, roleRef.current);
     }
   }, [registerPresence]);
 
@@ -477,6 +586,13 @@ function App() {
         setVotes(roomFields.votes);
         setParticipants(roomFields.participants);
         setIsHost(Boolean(parsed.isHost));
+        setHostId(roomFields.hostId || '');
+        const restoredRole = parsed.role === 'viewer' || roomFields.participants[participantIdRef.current]?.role === 'viewer'
+          ? 'viewer'
+          : 'participant';
+        setMyRole(restoredRole);
+        roleRef.current = restoredRole;
+        setJoinRole(restoredRole);
 
         if (parsed.joined) {
           setJoined(true);
@@ -550,7 +666,7 @@ function App() {
     const now = Date.now();
     const initialVote = { id: nextParticipantId, name, vote: null };
     const initialParticipants = {
-      [nextParticipantId]: { id: nextParticipantId, name, online: true, lastSeen: now },
+      [nextParticipantId]: { id: nextParticipantId, name, online: true, lastSeen: now, role: 'participant' },
     };
     const baseRoom = {
       roomCode: nextRoomCode,
@@ -565,7 +681,7 @@ function App() {
         [nextParticipantId]: { name, vote: null },
       },
       participants: {
-        [nextParticipantId]: { name, online: true, lastSeen: now },
+        [nextParticipantId]: { name, online: true, lastSeen: now, role: 'participant' },
       },
     };
 
@@ -573,6 +689,8 @@ function App() {
     setJoined(true);
     joinedRef.current = true;
     setIsHost(true);
+    setHostId(nextParticipantId);
+    setMyRole('participant');
     setRevealed(false);
     setHostOnly(hostOnly);
     setSelectedVote(null);
@@ -594,6 +712,8 @@ function App() {
       votes: [initialVote],
       participants: initialParticipants,
       isHost: true,
+      hostId: nextParticipantId,
+      role: 'participant',
       selectedScaleId: nextScaleId,
     });
 
@@ -633,9 +753,17 @@ function App() {
 
     const nextParticipantId = getOrCreateParticipantId(name);
     participantIdRef.current = nextParticipantId;
+    const nextRole = joinRole === 'viewer' ? 'viewer' : 'participant';
+    const isViewerJoin = nextRole === 'viewer';
 
     const entry = { id: nextParticipantId, name, vote: null };
-    const nextVotes = upsertVoteEntry(dedupeVotesByName(existingRoom.votes || [], name), entry);
+    const existingVotes = dedupeVotesByName(existingRoom.votes || [], name)
+      .filter((voteEntry) => voteEntry.id !== nextParticipantId);
+    const nextVotes = isViewerJoin ? existingVotes : upsertVoteEntry(existingVotes, entry);
+    const nextParticipants = {
+      ...(existingRoom.participants || {}),
+      [nextParticipantId]: { id: nextParticipantId, name, online: true, lastSeen: Date.now(), role: nextRole },
+    };
     const roomScaleId = existingRoom.selectedScaleId
       || (selectedScaleId === CUSTOM_SCALE_ID ? defaultScales[0].id : selectedScaleId)
       || defaultScales[0].id;
@@ -645,13 +773,15 @@ function App() {
     setJoined(true);
     joinedRef.current = true;
     setIsHost(existingRoom.hostId === nextParticipantId);
+    setHostId(existingRoom.hostId || '');
+    setMyRole(nextRole);
     setRevealed(Boolean(existingRoom.revealed));
     setHostOnly(Boolean(existingRoom.hostOnly));
     setRoomTitle(existingRoom.roomTitle || roomTitle || 'Sprint Planning');
     setSelectedScaleId(roomScaleId);
     setSelectedVote(null);
     setVotes(nextVotes);
-    setParticipants(existingRoom.participants || {});
+    setParticipants(nextParticipants);
     setJoinError('');
     setExpired(false);
     setConnectionStatus(database ? 'Joining room…' : 'Joined room');
@@ -665,14 +795,16 @@ function App() {
       hostOnly: Boolean(existingRoom.hostOnly),
       selectedVote: null,
       votes: nextVotes,
-      participants: existingRoom.participants || {},
+      participants: nextParticipants,
       isHost: existingRoom.hostId === nextParticipantId,
+      hostId: existingRoom.hostId || '',
+      role: nextRole,
       selectedScaleId: roomScaleId,
     });
 
     if (database) {
-      await registerPresence(nextRoomCode, nextParticipantId, name);
-      setConnectionStatus('Joined room');
+      await registerPresence(nextRoomCode, nextParticipantId, name, nextRole);
+      setConnectionStatus(isViewerJoin ? 'Watching as viewer' : 'Joined room');
     }
   };
 
@@ -708,6 +840,10 @@ function App() {
 
   const submitVote = async (value) => {
     if (!joined) return;
+    if (roleRef.current === 'viewer') {
+      setConnectionStatus('Viewer mode — voting is disabled');
+      return;
+    }
     const normalizedVote = String(value);
     if (!activeScale.values.includes(normalizedVote)) return;
 
@@ -741,8 +877,29 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (!joined) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (roleRef.current === 'viewer') return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName))) {
+        return;
+      }
+      const index = Number(event.key) - 1;
+      if (!Number.isInteger(index) || index < 0 || index >= activeScale.values.length) return;
+      event.preventDefault();
+      submitVote(activeScale.values[index]);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeScale, joined, submitVote]);
+
   const revealVotes = async () => {
     if (!joined) return;
+    if (roleRef.current === 'viewer') return;
     if (hostOnly && !isHost) return;
 
     const nextValue = !revealed;
@@ -768,6 +925,7 @@ function App() {
 
   const resetRound = async () => {
     if (!joined) return;
+    if (roleRef.current === 'viewer') return;
     if (hostOnly && !isHost) return;
 
     setSelectedVote(null);
@@ -815,6 +973,9 @@ function App() {
     setHostOnly(false);
     setRoomCode('');
     setIsHost(false);
+    setHostId('');
+    setMyRole('participant');
+    setJoinRole('participant');
     setJoinLink('');
     setConnectionStatus('Ready to connect');
     window.history.replaceState({}, '', window.location.pathname);
@@ -840,7 +1001,7 @@ function App() {
     setCanRetry(false);
     setConnectionStatus('Reconnecting…');
     if (joined && roomCode && database) {
-      registerPresence(roomCode, participantIdRef.current, nameRef.current);
+      registerPresence(roomCode, participantIdRef.current, nameRef.current, roleRef.current);
     }
     setListenerEpoch((value) => value + 1);
   };
@@ -856,6 +1017,9 @@ function App() {
     setHostOnly(false);
     setRoomCode('');
     setIsHost(false);
+    setHostId('');
+    setMyRole('participant');
+    setJoinRole('participant');
     setJoinLink('');
     setConnectionStatus('Ready to connect');
     window.history.replaceState({}, '', window.location.pathname);
@@ -873,12 +1037,34 @@ function App() {
     }
   };
 
+  const copyRoomCode = async () => {
+    const code = roomCodeRef.current;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      setConnectionStatus('Room code copied');
+    } catch (error) {
+      console.error('Unable to copy room code', error);
+      setConnectionStatus('Unable to copy room code');
+    }
+  };
+
+  const toggleTheme = () => {
+    setTheme((value) => (value === 'dark' ? 'light' : 'dark'));
+  };
+
   const participantEntries = useMemo(() => {
     const entries = [];
     const participantIds = Object.keys(participants);
     if (participantIds.length === 0) {
       for (const voteEntry of votes) {
-        entries.push({ id: voteEntry.id, name: voteEntry.name, online: true, vote: voteEntry.vote });
+        entries.push({
+          id: voteEntry.id,
+          name: voteEntry.name,
+          online: true,
+          role: 'participant',
+          vote: voteEntry.vote,
+        });
       }
       return entries;
     }
@@ -888,24 +1074,111 @@ function App() {
         id,
         name: participant.name || voteEntry?.name || '',
         online: Boolean(participant.online),
+        role: participant.role === 'viewer' ? 'viewer' : 'participant',
         vote: voteEntry?.vote ?? null,
       });
     }
     return entries;
   }, [participants, votes]);
 
+  const voterEntries = participantEntries.filter((entry) => entry.role !== 'viewer');
+  const votedCount = voterEntries.filter((entry) => (
+    entry.vote !== null && entry.vote !== undefined && entry.vote !== ''
+  )).length;
+  const totalCount = voterEntries.length;
+  const participantCount = participantEntries.length;
+  const viewerCount = participantEntries.length - voterEntries.length;
+  const progressPercent = totalCount ? Math.round((votedCount / totalCount) * 100) : 0;
+  const connectionWarning = /unavailable|retry|check|saved on this device|unable/i.test(connectionStatus);
+  const isViewer = myRole === 'viewer';
+
+  const roundSummary = useMemo(() => {
+    if (!revealed) return null;
+
+    const allowedValues = new Set(activeScale.values.map((value) => String(value)));
+    const castVotes = participantEntries
+      .filter((entry) => entry.role !== 'viewer')
+      .map((entry) => entry.vote)
+      .filter((vote) => vote !== null && vote !== undefined && vote !== '')
+      .map((vote) => String(vote))
+      .filter((vote) => allowedValues.has(vote));
+
+    const counts = {};
+    for (const vote of castVotes) {
+      counts[vote] = (counts[vote] || 0) + 1;
+    }
+
+    const numericVotes = castVotes.map(Number).filter((value) => Number.isFinite(value));
+    const sortedNumeric = [...numericVotes].sort((a, b) => a - b);
+    const average = numericVotes.length
+      ? numericVotes.reduce((sum, value) => sum + value, 0) / numericVotes.length
+      : null;
+    const median = sortedNumeric.length
+      ? (
+        sortedNumeric[Math.floor((sortedNumeric.length - 1) / 2)]
+        + sortedNumeric[Math.ceil((sortedNumeric.length - 1) / 2)]
+      ) / 2
+      : null;
+    const distribution = Object.entries(counts).sort((a, b) => (
+      b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true })
+    ));
+    const topCount = distribution.length ? distribution[0][1] : 0;
+
+    return {
+      totalVotes: castVotes.length,
+      average,
+      median,
+      distribution,
+      modes: distribution.filter(([, count]) => count === topCount).map(([value]) => value),
+      unanimous: castVotes.length > 0 && Object.keys(counts).length === 1,
+      consensus: castVotes.length > 0 && topCount > castVotes.length / 2,
+    };
+  }, [activeScale, participantEntries, revealed]);
+
+  const sessionActions = (
+    <>
+      {!isViewer && (!hostOnly || isHost) ? (
+        <>
+          <button aria-pressed={revealed} onClick={revealVotes}>{revealed ? 'Hide votes' : 'Reveal votes'}</button>
+          <button className="secondary" onClick={resetRound}>Reset round</button>
+        </>
+      ) : null}
+      <button className="ghost" onClick={leaveRoom}>Leave</button>
+    </>
+  );
+
   return (
-    <div className="app-shell">
-      <header className="hero-card">
-        <div>
-          <p className="eyebrow">Scrum Poker</p>
-          <h1>{roomTitle || 'Scrum Poker Room'}</h1>
+    <div className={joined ? 'app-shell is-joined' : 'app-shell'}>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true"><LogoMark /></span>
+          <div className="brand-text">
+            <p className="brand-title">Scrum Poker</p>
+            <p className="brand-subtitle">Planning, simplified</p>
+          </div>
         </div>
-        <div className="pill">{joined ? `Room ${roomCode}` : 'Not joined'}</div>
+        <div className="topbar-actions">
+          {joined && roomCode ? (
+            <button className="room-chip" onClick={copyRoomCode} aria-label={`Copy room code ${roomCode}`} title="Copy room code">
+              <span className="room-label">Room</span>
+              <span className="room-code">{roomCode}</span>
+              <CopyIcon />
+            </button>
+          ) : null}
+          <button
+            className="icon-button"
+            onClick={toggleTheme}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          >
+            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+        </div>
       </header>
 
       {expired ? (
-        <section className="card">
+        <section className="card state-card">
+          <p className="eyebrow">Session ended</p>
           <h2>This room has expired</h2>
           <p className="muted">Rooms expire after a period of inactivity. Create a new room to keep planning.</p>
           <div className="button-row">
@@ -913,89 +1186,177 @@ function App() {
           </div>
         </section>
       ) : !joined ? (
-        <section className="card form-card">
-          <h2>Create or join a room</h2>
-          <label>
-            Your name
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex" autoComplete="name" />
-          </label>
-          {!hasRoomParam ? (
+        <div className="landing">
+          <section className="card landing-intro">
+            <p className="eyebrow">Open Scrum Poker</p>
+            <h2>Estimate together.<br />Decide faster.</h2>
+            <p className="landing-lead">
+              A lightweight planning poker room for your team. No accounts, no setup — share a code and start voting in seconds.
+            </p>
+            <ul className="feature-list">
+              <li className="feature-pill"><span className="feature-dot" aria-hidden="true" />Live sync</li>
+              <li className="feature-pill"><span className="feature-dot" aria-hidden="true" />No sign-in</li>
+              <li className="feature-pill"><span className="feature-dot" aria-hidden="true" />Installable PWA</li>
+            </ul>
+            <div className="hero-preview" aria-hidden="true">
+              <span className="preview-card">3</span>
+              <span className="preview-card">5</span>
+              <span className="preview-card">8</span>
+            </div>
+          </section>
+
+          <section className="card form-card">
+            <div className="form-head">
+              <h2>{hasRoomParam ? 'Join this room' : 'Create or join a room'}</h2>
+              <p className="muted">
+                {hasRoomParam ? 'Enter your name to join the session.' : 'Start a new session or enter an existing room code.'}
+              </p>
+            </div>
             <label>
-              Room title
-              <input value={roomTitle} onChange={(event) => setRoomTitle(event.target.value)} placeholder="Sprint Planning" />
+              <span className="field-label">Your name</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex" autoComplete="name" />
             </label>
-          ) : null}
-          <label>
-            Room code
-            <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" autoComplete="off" />
-          </label>
-          {!hasRoomParam ? (
-            <>
+            {!hasRoomParam ? (
               <label>
-                Estimation scale
-                <select value={selectedScaleId} onChange={(event) => { setSelectedScaleId(event.target.value); persistScalePreference(event.target.value); }}>
-                  {scaleOptions.map((scale) => (
-                    <option key={scale.id} value={scale.id}>
-                      {scale.name}
-                    </option>
-                  ))}
-                  <option value={CUSTOM_SCALE_ID}>Custom scale</option>
-                </select>
+                <span className="field-label">Room title</span>
+                <input value={roomTitle} onChange={(event) => setRoomTitle(event.target.value)} placeholder="Sprint Planning" />
               </label>
-              {selectedScaleId === CUSTOM_SCALE_ID ? (
-                <div className="scale-builder">
-                  <input
-                    value={customScaleName}
-                    onChange={(event) => setCustomScaleName(event.target.value)}
-                    placeholder="New scale name"
-                  />
-                  <input
-                    value={customScaleValuesInput}
-                    onChange={(event) => setCustomScaleValuesInput(event.target.value)}
-                    placeholder="Values, separated, by commas"
-                  />
-                  <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
-                </div>
-              ) : null}
-            </>
-          ) : null}
-          {!hasRoomParam ? (
-            <label className="check-row">
-              <input type="checkbox" checked={hostOnly} onChange={(event) => setHostOnly(event.target.checked)} />
-              Restrict Reveal / Reset to the host
+            ) : null}
+            <label>
+              <span className="field-label">Room code</span>
+              <input value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="AB12" autoComplete="off" />
             </label>
-          ) : null}
-          <div className="button-row">
-            {!hasRoomParam ? <button onClick={createRoom}>Create room</button> : null}
-            <button className="secondary" onClick={joinRoom}>Join room</button>
-          </div>
-          {joinError ? <p className="muted status-line" role="alert">{joinError}</p> : null}
-          <p className="muted status-line">Share the room link from the host and enter your name before you join.</p>
-        </section>
+            {hasRoomParam || roomCode.trim() ? (
+              <div className="role-picker">
+                <span className="field-label" id="join-role-label">Join as</span>
+                <div className="role-options" role="radiogroup" aria-labelledby="join-role-label">
+                  <label className={`role-option ${joinRole === 'participant' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="join-role"
+                      value="participant"
+                      checked={joinRole === 'participant'}
+                      onChange={() => setJoinRole('participant')}
+                    />
+                    <span className="role-option-body">
+                      <span className="role-option-title">Participant</span>
+                      <span className="role-option-desc">Cast a vote each round.</span>
+                    </span>
+                  </label>
+                  <label className={`role-option ${joinRole === 'viewer' ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="join-role"
+                      value="viewer"
+                      checked={joinRole === 'viewer'}
+                      onChange={() => setJoinRole('viewer')}
+                    />
+                    <span className="role-option-body">
+                      <span className="role-option-title">Viewer</span>
+                      <span className="role-option-desc">Watch live without voting.</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            ) : null}
+            {!hasRoomParam ? (
+              <>
+                <label>
+                  <span className="field-label">Estimation scale</span>
+                  <select value={selectedScaleId} onChange={(event) => { setSelectedScaleId(event.target.value); persistScalePreference(event.target.value); }}>
+                    {scaleOptions.map((scale) => (
+                      <option key={scale.id} value={scale.id}>
+                        {scale.name}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_SCALE_ID}>Custom scale</option>
+                  </select>
+                </label>
+                {selectedScaleId === CUSTOM_SCALE_ID ? (
+                  <div className="scale-builder">
+                    <input
+                      value={customScaleName}
+                      onChange={(event) => setCustomScaleName(event.target.value)}
+                      placeholder="New scale name"
+                    />
+                    <input
+                      value={customScaleValuesInput}
+                      onChange={(event) => setCustomScaleValuesInput(event.target.value)}
+                      placeholder="Values, separated, by commas"
+                    />
+                    <button className="secondary" onClick={addCustomScale}>Create custom scale</button>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+            {!hasRoomParam ? (
+              <label className="check-row">
+                <input type="checkbox" checked={hostOnly} onChange={(event) => setHostOnly(event.target.checked)} />
+                Restrict Reveal / Reset to the host
+              </label>
+            ) : null}
+            <div className="button-row">
+              {!hasRoomParam ? <button onClick={createRoom}>Create room</button> : null}
+              <button className={hasRoomParam ? '' : 'secondary'} onClick={joinRoom}>Join room</button>
+            </div>
+            {joinError ? <p className="form-error" role="alert">{joinError}</p> : null}
+            <p className="muted form-hint">
+              {hasRoomParam ? 'You will join the session as soon as you enter your name.' : 'Share the host’s room link, or use a room code to join.'}
+            </p>
+          </section>
+        </div>
       ) : (
         <>
           <section className="card">
             <div className="section-head">
               <div>
                 <p className="eyebrow">Live session</p>
-                <h2>{roomTitle}</h2>
+                <h2 className="session-title">{roomTitle}</h2>
+                <div className="session-meta">
+                  <span className={`badge ${isHost ? 'host' : isViewer ? 'viewer' : ''}`}>
+                    {isHost ? 'Host' : isViewer ? 'Viewer' : 'Participant'}
+                  </span>
+                  {hostOnly ? <span className="badge">Host-only controls</span> : null}
+                </div>
               </div>
-              <div className="button-row compact">
-                {(!hostOnly || isHost) ? (
-                  <>
-                    <button aria-pressed={revealed} onClick={revealVotes}>{revealed ? 'Hide votes' : 'Reveal votes'}</button>
-                    <button className="secondary" onClick={resetRound}>Reset round</button>
-                  </>
-                ) : null}
-                <button className="ghost" onClick={leaveRoom}>Leave</button>
+              <div className="session-actions session-actions-desktop">
+                {sessionActions}
               </div>
             </div>
-            <p className="muted">
-              Welcome, {name}. {isHost ? 'You are hosting this room.' : 'You are joining as a participant.'}
-              {hostOnly && !isHost ? ' Only the host can reveal or reset the round.' : ''}
+            <p className="muted welcome-line">
+              Welcome, {name}.{' '}
+              {isHost
+                ? 'You are hosting this room.'
+                : isViewer
+                  ? 'You are watching this session without voting.'
+                  : 'You are joining as a participant.'}
+              {isViewer
+                ? ' Viewer mode is read-only, so you will not cast a vote.'
+                : hostOnly && !isHost
+                  ? ' Only the host can reveal or reset the round.'
+                  : ''}
             </p>
+            <div className="vote-progress">
+              <div className="progress-head">
+                <span><strong>{votedCount}</strong> of {totalCount} voted{viewerCount ? ` · ${viewerCount} watching` : ''}</span>
+                <span>{revealed ? 'Votes revealed' : 'Waiting for votes'}</span>
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax={totalCount}
+                aria-valuenow={votedCount}
+                aria-label="Votes submitted"
+              >
+                <div className="progress-bar" style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
             <div className="status-row">
-              <p className="status-line" role="status" aria-live="polite">Connection: {connectionStatus}</p>
+              <p className={`connection-status ${connectionWarning ? 'warn' : ''}`} role="status" aria-live="polite">
+                <span className={`status-dot ${connectionWarning ? 'warn' : ''}`} aria-hidden="true" />
+                {connectionStatus}
+              </p>
               {canRetry ? <button className="ghost" onClick={retryConnection}>Retry connection</button> : null}
             </div>
             {isHost && joinLink ? (
@@ -1004,54 +1365,156 @@ function App() {
                 <button className="secondary" onClick={copyInviteLink}>Copy invite link</button>
               </div>
             ) : null}
+
+            {SHOW_ROUND_SUMMARY && revealed && roundSummary ? (
+              <div className="round-summary">
+                <div className="summary-head">
+                  <h3>Round summary</h3>
+                  <span className={`summary-badge ${roundSummary.unanimous ? 'ok' : roundSummary.consensus ? 'majority' : 'split'}`}>
+                    {roundSummary.totalVotes === 0
+                      ? 'No votes'
+                      : roundSummary.unanimous
+                        ? 'Unanimous'
+                        : roundSummary.consensus
+                          ? 'Majority'
+                          : 'Split'}
+                  </span>
+                </div>
+                <div className="summary-metrics">
+                  <div className="metric">
+                    <p className="metric-label">Average</p>
+                    <p className="metric-value">{formatMetric(roundSummary.average)}</p>
+                  </div>
+                  <div className="metric">
+                    <p className="metric-label">Median</p>
+                    <p className="metric-value">{formatMetric(roundSummary.median)}</p>
+                  </div>
+                  <div className="metric">
+                    <p className="metric-label">Mode</p>
+                    <p className="metric-value">{roundSummary.modes.length ? roundSummary.modes.join(', ') : '—'}</p>
+                  </div>
+                </div>
+                {roundSummary.distribution.length ? (
+                  <div className="distribution">
+                    {roundSummary.distribution.map(([value, count]) => (
+                      <div className="distribution-row" key={value}>
+                        <span className="distribution-value">{value}</span>
+                        <span className="distribution-track">
+                          <span className="distribution-fill" style={{ width: `${(count / roundSummary.totalVotes) * 100}%` }} />
+                        </span>
+                        <span className="distribution-count">{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="empty-summary">No votes were submitted this round.</p>
+                )}
+              </div>
+            ) : null}
+
+            <div className="session-actions session-actions-mobile">
+              {sessionActions}
+            </div>
           </section>
 
           <div className="room-body">
-            <section className="card">
-              <h3>Choose your estimate</h3>
-              <div className="card-grid">
-                {activeScale.values.map((value) => (
-                  <button
-                    key={value}
-                    className={`vote-card ${selectedVote === value ? 'selected' : ''}`}
-                    aria-pressed={selectedVote === value}
-                    aria-label={`Vote ${value}`}
-                    onClick={() => submitVote(value)}
-                  >
-                    {value}
-                  </button>
-                ))}
-              </div>
-            </section>
+            {isViewer ? (
+              <section className="card viewer-card">
+                <span className="viewer-icon" aria-hidden="true"><ViewerIcon /></span>
+                <div className="viewer-copy">
+                  <p className="eyebrow">Viewer mode</p>
+                  <h3>You’re watching this round</h3>
+                  <p className="muted">
+                    The vote deck is hidden for viewers. Results appear here and in the participant list when the host reveals the round.
+                    Leave and rejoin as a participant if you want to vote.
+                  </p>
+                </div>
+              </section>
+            ) : (
+              <section className="card">
+                <div className="section-head">
+                  <div>
+                    <h3>Choose your estimate</h3>
+                    <p className="muted card-subtitle">Click a card or press its number key.</p>
+                  </div>
+                  <span className="badge">{activeScale.name}</span>
+                </div>
+                <div className="card-grid">
+                  {activeScale.values.map((value, index) => (
+                    <button
+                      key={value}
+                      className={`vote-card ${selectedVote === value ? 'selected' : ''}`}
+                      style={{ animationDelay: `${index * 28}ms` }}
+                      aria-pressed={selectedVote === value}
+                      aria-label={`Vote ${value}`}
+                      aria-keyshortcuts={index < 9 ? String(index + 1) : undefined}
+                      title={index < 9 ? `Press ${index + 1}` : undefined}
+                      onClick={() => submitVote(value)}
+                    >
+                      {index < 9 ? <span className="vote-key" aria-hidden="true">{index + 1}</span> : null}
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="card participants-column">
-              <h3>Participants</h3>
+              <div className="section-head">
+                <h3>Participants</h3>
+                <span className="badge">{participantCount}</span>
+              </div>
               <ul className="participant-list" aria-live="polite" aria-relevant="additions removals">
                 {participantEntries.length === 0 ? (
-                  <li className="muted">No participants yet.</li>
+                  <li className="empty-state">No participants yet.</li>
                 ) : (
                   participantEntries.map((entry) => {
-                    const hasVoted = Boolean(entry.vote);
-                    const validVote = entry.vote && activeScale.values.includes(String(entry.vote)) ? String(entry.vote) : null;
-                    const statusLabel = revealed
-                      ? validVote
-                        ? `voted ${validVote}`
-                        : 'did not vote'
-                      : hasVoted
-                        ? 'has voted'
-                        : 'has not voted';
-                    const voteText = revealed
-                      ? validVote || '—'
-                      : hasVoted
-                        ? '✓'
-                        : 'Pending';
+                    const entryIsViewer = entry.role === 'viewer';
+                    const hasVoted = !entryIsViewer
+                      && entry.vote !== null
+                      && entry.vote !== undefined
+                      && entry.vote !== '';
+                    const validVote = hasVoted && activeScale.values.map(String).includes(String(entry.vote))
+                      ? String(entry.vote)
+                      : null;
+                    const statusLabel = entryIsViewer
+                      ? 'is watching'
+                      : revealed
+                        ? validVote
+                          ? `voted ${validVote}`
+                          : 'did not vote'
+                        : hasVoted
+                          ? 'has voted'
+                          : 'has not voted';
+                    const voteText = entryIsViewer
+                      ? 'Watching'
+                      : revealed
+                        ? validVote || '—'
+                        : hasVoted
+                          ? '✓ Voted'
+                          : 'Pending';
                     return (
                       <li key={entry.id}>
-                        <span>
-                          {entry.name}
-                          <span className="sr-only">{statusLabel}</span>
+                        <span className="participant-avatar" style={getAvatarStyle(entry.name)} aria-hidden="true">
+                          {getInitials(entry.name)}
+                          <span className={`presence-dot ${entry.online ? '' : 'offline'}`} />
                         </span>
-                        <strong aria-hidden="true">{voteText}</strong>
+                        <span className="participant-main">
+                          <span className="participant-name">{entry.name || 'Participant'}</span>
+                          <span className="participant-tags">
+                            {entry.id === participantIdRef.current ? <span className="mini-badge you">You</span> : null}
+                            {entry.id === hostId ? <span className="mini-badge host">Host</span> : null}
+                            {entryIsViewer ? <span className="mini-badge viewer">Viewer</span> : null}
+                            {!entry.online ? <span className="mini-badge offline">Offline</span> : null}
+                            <span className="sr-only">{statusLabel}</span>
+                          </span>
+                        </span>
+                        <span
+                          className={`vote-badge ${entryIsViewer ? 'watching' : ''} ${revealed ? 'revealed' : ''} ${!entryIsViewer && !revealed && !hasVoted ? 'pending' : ''} ${!entryIsViewer && !revealed && hasVoted ? 'voted' : ''}`}
+                          aria-hidden="true"
+                        >
+                          {voteText}
+                        </span>
                       </li>
                     );
                   })
