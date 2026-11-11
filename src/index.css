@@ -51,6 +51,7 @@
   --pill-text: #ffffff;
   --selected-bg: linear-gradient(135deg, #4f46e5 0%, #0ea5e9 100%);
   --selected-text: #ffffff;
+  --selected-border: rgba(255, 255, 255, 0.3);
   --selected-ring: rgba(129, 140, 248, 0.28);
   --selected-shadow: 0 18px 40px rgba(14, 165, 233, 0.3);
   --option-bg: #111827;
@@ -86,15 +87,15 @@
   --warning-soft: rgba(180, 83, 9, 0.16);
   --danger: #be123c;
 
-  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.82) 55%, rgba(255, 255, 255, 0.74));
-  --surface-solid: rgba(255, 255, 255, 0.85);
-  --surface-solid-strong: rgba(255, 255, 255, 0.98);
-  --surface-inset: rgba(15, 23, 42, 0.08);
-  --border: rgba(15, 23, 42, 0.12);
-  --border-strong: rgba(15, 23, 42, 0.22);
-  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  --shadow-sm: 0 12px 28px rgba(15, 23, 42, 0.09);
-  --shadow-lg: 0 28px 70px rgba(15, 23, 42, 0.13);
+  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(248, 250, 252, 0.76) 55%, rgba(241, 245, 249, 0.7));
+  --surface-solid: rgba(255, 255, 255, 0.76);
+  --surface-solid-strong: rgba(255, 255, 255, 0.95);
+  --surface-inset: rgba(15, 23, 42, 0.07);
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.16);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-sm: 0 10px 24px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 22px 54px rgba(15, 23, 42, 0.08);
 
   --button-bg: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
   --button-text: #ffffff;
@@ -107,10 +108,11 @@
   --ghost-border: rgba(15, 23, 42, 0.18);
   --pill-bg: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
   --pill-text: #ffffff;
-  --selected-bg: linear-gradient(135deg, #4f46e5 0%, #0284c7 100%);
-  --selected-text: #ffffff;
-  --selected-ring: rgba(79, 70, 229, 0.2);
-  --selected-shadow: 0 18px 40px rgba(79, 70, 229, 0.24);
+  --selected-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.24), rgba(14, 165, 233, 0.16));
+  --selected-text: #312e81;
+  --selected-border: rgba(79, 70, 229, 0.42);
+  --selected-ring: rgba(79, 70, 229, 0.16);
+  --selected-shadow: 0 14px 30px rgba(79, 70, 229, 0.16);
   --option-bg: #ffffff;
 }
 
@@ -309,6 +311,14 @@ h1 { font-size: 1.35rem; }
   padding: 20px;
 }
 
+/* Light theme only: a soft frost helps the panels blend with the page's
+   lavender/sky background. Scoped to light so the dark-theme hover artifact
+   (caused by re-sampling the blur) cannot return. */
+[data-theme='light'] .card {
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(16px) saturate(130%);
+}
+
 .landing {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
@@ -393,7 +403,7 @@ h1 { font-size: 1.35rem; }
   transform: translateY(-10px) rotate(0deg);
   background: var(--selected-bg);
   color: var(--selected-text);
-  border-color: var(--border-strong);
+  border-color: var(--selected-border);
   box-shadow: var(--selected-shadow), var(--highlight);
 }
 
@@ -961,7 +971,7 @@ button.ghost:hover {
 .vote-card.selected {
   background: var(--selected-bg);
   color: var(--selected-text);
-  border-color: var(--border-strong);
+  border-color: var(--selected-border);
   box-shadow: 0 0 0 4px var(--selected-ring), var(--selected-shadow), var(--highlight);
   transform: translateY(-2px);
 }
