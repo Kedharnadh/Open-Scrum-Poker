@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0f172a" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#eef2ff" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="description" content="A lightweight Scrum Poker planning app with live sync, no sign-in, and offline support." />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -22,10 +22,14 @@
     <script>
       (function () {
         try {
+          var versionKey = 'scrum-poker-theme-default-version';
+          var version = 'light-1';
+          if (localStorage.getItem(versionKey) !== version) {
+            localStorage.removeItem('scrum-poker-theme');
+            localStorage.setItem(versionKey, version);
+          }
           var stored = localStorage.getItem('scrum-poker-theme');
-          var theme = stored === 'light' || stored === 'dark'
-            ? stored
-            : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+          var theme = stored === 'light' || stored === 'dark' ? stored : 'light';
           document.documentElement.dataset.theme = theme;
           var meta = document.querySelector('meta[name="theme-color"]');
           if (meta) meta.setAttribute('content', theme === 'light' ? '#eef2ff' : '#0f172a');

@@ -31,6 +31,21 @@ const defaultScales = [
 
 const CUSTOM_SCALE_ID = '__custom__';
 const themeKey = 'scrum-poker-theme';
+const themeHintKey = 'scrum-poker-theme-hint-seen';
+const THEME_HINT_INTERVAL_MS = 60 * 24 * 60 * 60 * 1000;
+// Bump this when the default theme changes so existing visitors get it once.
+const themeDefaultVersionKey = 'scrum-poker-theme-default-version';
+const THEME_DEFAULT_VERSION = 'light-1';
+
+function applyThemeDefaultMigration() {
+  try {
+    if (window.localStorage.getItem(themeDefaultVersionKey) === THEME_DEFAULT_VERSION) return;
+    window.localStorage.removeItem(themeKey);
+    window.localStorage.setItem(themeDefaultVersionKey, THEME_DEFAULT_VERSION);
+  } catch (error) {}
+}
+
+applyThemeDefaultMigration();
 
 function getInitials(value) {
   const parts = (value || '').trim().split(/\s+/).filter(Boolean);
@@ -168,9 +183,18 @@ function App() {
     try {
       const stored = window.localStorage.getItem(themeKey);
       if (stored === 'light' || stored === 'dark') return stored;
-      return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      return 'light';
     } catch (error) {
-      return 'dark';
+      return 'light';
+    }
+  });
+  const [showThemeHint, setShowThemeHint] = useState(() => {
+    try {
+      const lastShownAt = Number(window.localStorage.getItem(themeHintKey));
+      if (!Number.isFinite(lastShownAt) || lastShownAt <= 0) return true;
+      return Date.now() - lastShownAt >= THEME_HINT_INTERVAL_MS;
+    } catch (error) {
+      return true;
     }
   });
 
@@ -226,6 +250,14 @@ function App() {
       meta.setAttribute('content', theme === 'light' ? '#eef2ff' : '#0f172a');
     }
   }, [theme]);
+
+  useEffect(() => {
+    if (!showThemeHint) return;
+    try {
+      // Remember when the tip was shown so it only reappears after the reminder window.
+      window.localStorage.setItem(themeHintKey, String(Date.now()));
+    } catch (error) {}
+  }, [showThemeHint]);
 
   const getRoomStorageKey = useCallback((code) => `scrum-poker-demo-room:${(code || '').toUpperCase()}`, []);
 
@@ -1049,7 +1081,15 @@ function App() {
     }
   };
 
+  const dismissThemeHint = () => {
+    setShowThemeHint(false);
+    try {
+      window.localStorage.setItem(themeHintKey, String(Date.now()));
+    } catch (error) {}
+  };
+
   const toggleTheme = () => {
+    dismissThemeHint();
     setTheme((value) => (value === 'dark' ? 'light' : 'dark'));
   };
 
@@ -1165,14 +1205,25 @@ function App() {
               <CopyIcon />
             </button>
           ) : null}
-          <button
-            className="icon-button"
-            onClick={toggleTheme}
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-          </button>
+          <div className="theme-toggle">
+            {showThemeHint ? (
+              <div className="theme-hint" id="theme-hint" role="note">
+                <span className="theme-hint-text">Light or dark — switch themes with this button.</span>
+                <button type="button" className="theme-hint-dismiss" onClick={dismissThemeHint}>
+                  Got it
+                </button>
+              </div>
+            ) : null}
+            <button
+              className={`icon-button${showThemeHint ? ' theme-hint-target' : ''}`}
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+              aria-describedby={showThemeHint ? 'theme-hint' : undefined}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            >
+              {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+            </button>
+          </div>
         </div>
       </header>
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'scrum-poker-demo-cache-v3';
+const CACHE_NAME = 'scrum-poker-demo-cache-v4';
 const APP_SHELL = [
   './',
   '/Open-Scrum-Poker/',

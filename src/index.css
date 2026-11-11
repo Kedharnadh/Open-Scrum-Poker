@@ -637,6 +637,70 @@ button.ghost:hover {
 
 .icon-button svg { width: 20px; height: 20px; }
 
+.theme-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.theme-hint {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 9px 10px 9px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: var(--glass-bg);
+  color: var(--text);
+  box-shadow: var(--shadow-lg), var(--highlight);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  animation: theme-hint-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.theme-hint-text { max-width: 190px; }
+
+.theme-hint-dismiss {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.theme-hint-dismiss:hover {
+  filter: brightness(1.08);
+  box-shadow: none;
+}
+
+.icon-button.theme-hint-target {
+  border-color: var(--accent);
+  animation: theme-hint-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes theme-hint-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes theme-hint-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--accent-soft), var(--highlight); }
+  50% { box-shadow: 0 0 0 7px var(--accent-soft), var(--highlight); }
+}
+
 .section-head {
   display: flex;
   justify-content: space-between;

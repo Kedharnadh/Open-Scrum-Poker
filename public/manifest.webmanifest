@@ -4,8 +4,8 @@
   "description": "A lightweight planning poker app with live sync, no sign-in, and offline support.",
   "start_url": "/Open-Scrum-Poker/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#eef2ff",
+  "theme_color": "#eef2ff",
   "categories": ["productivity", "utilities"],
   "icons": [
     {
