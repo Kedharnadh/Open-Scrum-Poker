@@ -150,8 +150,20 @@ function buildJoinLink(roomCode, roomTitle, selectedScaleId) {
 
 function App() {
   const [name, setName] = useState('');
-  const [roomCode, setRoomCode] = useState('');
-  const [roomTitle, setRoomTitle] = useState('Sprint Planning');
+  const [roomCode, setRoomCode] = useState(() => {
+    try {
+      return (new URLSearchParams(window.location.search).get('room') || '').toUpperCase();
+    } catch (error) {
+      return '';
+    }
+  });
+  const [roomTitle, setRoomTitle] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('title') || 'Sprint Planning';
+    } catch (error) {
+      return 'Sprint Planning';
+    }
+  });
   const [joined, setJoined] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [hostOnly, setHostOnly] = useState(false);
@@ -164,6 +176,8 @@ function App() {
   const [joinLink, setJoinLink] = useState('');
   const [selectedScaleId, setSelectedScaleId] = useState(() => {
     try {
+      const fromUrl = new URLSearchParams(window.location.search).get('scale');
+      if (fromUrl) return fromUrl;
       return window.localStorage.getItem(scalePrefKey) || defaultScales[0].id;
     } catch (error) {
       return defaultScales[0].id;
@@ -222,7 +236,11 @@ function App() {
     } catch (error) {}
   };
 
-  const hasRoomParam = new URLSearchParams(window.location.search).has('room');
+  // Join mode follows the room-code field: entering a code shows the
+  // Participant/Viewer options and hides "Create room"; clearing it brings
+  // "Create room" back. Do not derive this from the URL, because the URL is
+  // written from this same state and would keep the page stuck in join mode.
+  const hasRoomParam = Boolean(roomCode.trim());
 
   useEffect(() => {
     roomCodeRef.current = roomCode;
@@ -456,7 +474,10 @@ function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const roomValue = roomCode || params.get('room') || '';
+    const roomValue = roomCode.trim();
+    // Mirror the field into the URL, and remove the param when the field is
+    // empty. Never fall back to the previous URL value, or clearing the code
+    // would leave ?room=... behind and the page would stay in join mode.
     if (roomValue) {
       params.set('room', roomValue);
     } else {
